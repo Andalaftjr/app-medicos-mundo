@@ -1,0 +1,207 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function currentProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return signedIn() && currentProfile().role == 'admin';
+    }
+
+    function isCoordinator() {
+      return signedIn()
+        && currentProfile().role in ['admin', 'coordenador'];
+    }
+
+    function isOnlyCoordinator() {
+      return signedIn() && currentProfile().role == 'coordenador';
+    }
+
+    function profession() {
+      return currentProfile().profissao;
+    }
+
+    function isTransversalCollaborator() {
+      return currentProfile().role == 'colaborador_servico';
+    }
+
+    function isProfessionalProfile() {
+      return currentProfile().role in [
+        'profissional_formado', 'enfermeiro', 'medico', 'psicologo',
+        'odonto', 'nutricionista', 'fisioterapeuta', 'advogado',
+        'biomedico', 'veterinario'
+      ];
+    }
+
+    function canRegisterAssistido() {
+      return isCoordinator()
+        || isTransversalCollaborator()
+        || currentProfile().role == 'academico'
+        || isProfessionalProfile()
+        || profession() in ['cadastro_triagem', 'apoio_transversal'];
+    }
+
+    function isHealthTriageProfession() {
+      return profession() in [
+        'medicina', 'odontologia', 'psicologia', 'nutricao', 'fisioterapia',
+        'enfermagem', 'biomedicina', 'veterinaria', 'farmacia', 'podologia',
+        'vacinacao', 'exames_clinicos'
+      ];
+    }
+
+    function canPerformTriage() {
+      return isCoordinator()
+        || currentProfile().role == 'academico'
+        || (!isTransversalCollaborator()
+          && (profession() == 'cadastro_triagem' || isHealthTriageProfession()));
+    }
+
+    function canRecordCenso() {
+      return isCoordinator()
+        || isTransversalCollaborator()
+        || profession() in ['cadastro_triagem', 'servico_social', 'apoio_transversal']
+        || isHealthTriageProfession();
+    }
+
+    function canWorkArea(area) {
+      return isCoordinator()
+        || (!isTransversalCollaborator() && (
+        (area == 'Medicina Humana' && profession() == 'medicina')
+        || (area == 'Odontologia' && profession() == 'odontologia')
+        || (area == 'Psicologia' && profession() == 'psicologia')
+        || (area == 'Nutrição' && profession() == 'nutricao')
+        || (area == 'Fisioterapia' && profession() == 'fisioterapia')
+        || (area == 'Enfermagem / Curativos' && profession() in ['enfermagem', 'medicina'])
+        || (area == 'Vacinação' && profession() in ['enfermagem', 'biomedicina', 'medicina', 'farmacia', 'vacinacao'])
+        || (area == 'Biomedicina' && profession() in ['biomedicina', 'medicina'])
+        || (area == 'Exames Clínicos' && profession() in ['biomedicina', 'medicina', 'exames_clinicos'])
+        || (area == 'Veterinária' && profession() == 'veterinaria')
+        || (area == 'Justiça de Rua' && profession() == 'direito')
+        || (area == 'Podologia' && profession() in ['podologia', 'enfermagem', 'medicina'])
+        || (area == 'Farmácia' && profession() in ['farmacia', 'medicina', 'enfermagem'])
+        || (area == 'Doações' && profession() in ['doacoes', 'apoio_operacional'])
+        || (area == 'Beleza de Rua' && profession() in ['cabeleireiro', 'beleza'])
+        || (area == 'Acolhimento Social' && profession() in ['servico_social', 'acolhimento'])
+        || (area == 'Apoio à Mulher' && profession() in ['apoio_mulher', 'servico_social', 'psicologia'])
+        || (area == 'Atendimento Infantil / Brinquedoteca' && profession() == 'brinquedoteca')
+        || (area == 'Emissão de Documentos' && profession() in ['documentacao', 'servico_social', 'direito'])
+        ));
+    }
+
+    function requiresProfessionalValidation(area) {
+      return area in [
+        'Medicina Humana', 'Odontologia', 'Psicologia', 'Nutrição',
+        'Fisioterapia', 'Enfermagem / Curativos', 'Vacinação',
+        'Biomedicina', 'Exames Clínicos', 'Veterinária', 'Justiça de Rua',
+        'Podologia', 'Farmácia'
+      ];
+    }
+
+    function canWriteAtendimento(data) {
+      return canWorkArea(data.area)
+        && (currentProfile().role != 'academico' || data.status == 'Aguardando Profissional')
+        && (!requiresProfessionalValidation(data.area)
+          || isCoordinator()
+          || isProfessionalProfile()
+          || data.status == 'Aguardando Profissional');
+    }
+
+    function publicRole(role) {
+      return role in [
+        'voluntario_eficiente', 'colaborador_servico', 'academico', 'profissional_formado',
+        'voluntario', 'enfermeiro', 'medico', 'psicologo',
+        'odonto', 'nutricionista', 'fisioterapeuta', 'advogado',
+        'biomedico', 'veterinario'
+      ];
+    }
+
+    function publicProfession(profession) {
+      return profession in [
+        'medicina', 'odontologia', 'psicologia', 'nutricao', 'fisioterapia',
+        'enfermagem', 'biomedicina', 'veterinaria', 'direito', 'farmacia',
+        'servico_social', 'podologia', 'beleza', 'brinquedoteca', 'apoio_operacional',
+        'cadastro_triagem', 'vacinacao', 'exames_clinicos', 'cabeleireiro',
+        'apoio_mulher', 'documentacao', 'acolhimento', 'doacoes', 'apoio_transversal'
+      ];
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isCoordinator());
+      allow create: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.uid == userId
+        && publicRole(request.resource.data.role)
+        && (!('profissao' in request.resource.data) || publicProfession(request.resource.data.profissao));
+      allow update: if isAdmin()
+        || (signedIn() && request.auth.uid == userId
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.role == resource.data.role
+          && (!('profissao' in resource.data) || request.resource.data.profissao == resource.data.profissao)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'nome', 'nomeSocial', 'telefone', 'photo', 'registro',
+            'perfilAtualizadoEm', 'localAcao', 'cidadeAcao', 'email',
+            'emailVerified', 'ultimoLoginEm'
+          ])
+          && request.resource.data.email == request.auth.token.email
+          && request.resource.data.emailVerified == request.auth.token.email_verified
+          && request.resource.data.nome is string
+          && request.resource.data.nome.size() >= 3
+          && request.resource.data.nome.size() <= 120
+          && (!('nomeSocial' in request.resource.data)
+            || (request.resource.data.nomeSocial is string && request.resource.data.nomeSocial.size() <= 120))
+          && (!('telefone' in request.resource.data)
+            || (request.resource.data.telefone is string && request.resource.data.telefone.size() <= 24))
+          && (!('registro' in request.resource.data)
+            || (request.resource.data.registro is string && request.resource.data.registro.size() <= 60))
+          && (!('photo' in request.resource.data)
+            || (request.resource.data.photo is string && request.resource.data.photo.size() <= 450000)));
+      allow delete: if isAdmin()
+        || (isOnlyCoordinator()
+          && request.auth.uid != userId
+          && !(resource.data.role in ['admin', 'coordenador']));
+    }
+
+    match /admin_audit/{recordId} {
+      allow read: if isAdmin();
+      allow create: if isCoordinator()
+        && request.resource.data.actorUid == request.auth.uid
+        && request.resource.data.actorRole == currentProfile().role;
+      allow update, delete: if false;
+    }
+
+    match /assistidos/{recordId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && canRegisterAssistido();
+      allow update: if signedIn()
+        && (canRegisterAssistido()
+          || (request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['ultimoAtendimento', 'ultimoAtendimentoEm', 'chegadaAcaoData', 'chegadaAcaoEm'])
+            && (canPerformTriage() || canRecordCenso() || currentProfile().profissao != null)));
+      allow delete: if isCoordinator();
+    }
+
+    match /triagens/{recordId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && canPerformTriage();
+      allow delete: if isCoordinator();
+    }
+
+    match /anamneses/{recordId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && canRecordCenso();
+      allow delete: if isCoordinator();
+    }
+
+    match /atendimentos/{recordId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && canWriteAtendimento(request.resource.data);
+      allow delete: if isCoordinator();
+    }
+  }
+}
