@@ -38,7 +38,7 @@ No menu lateral do repositorio:
 
 1. Acesse **Deploy keys**.
 2. Clique em **Add deploy key**.
-3. Em **Title**, use `Codex app-medicos-mundo`.
+3. Em **Title**, use `Leandro - Projeto Medicos do Mundo`.
 4. Em **Key**, cole a chave publica gerada localmente.
 5. Marque **Allow write access**.
 6. Clique em **Add key**.
