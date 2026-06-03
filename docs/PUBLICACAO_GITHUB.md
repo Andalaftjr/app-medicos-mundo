@@ -25,8 +25,9 @@ Os seguintes itens foram adicionados ao `.gitignore` por conterem dados sensivei
 6. No terminal, dentro da pasta do projeto, execute:
 
 ```bash
-git remote add origin https://github.com/SEU-USUARIO/app-medicos-mundo.git
-git push -u origin feature/pep-architecture-v2
+git remote add origin git@github.com:Andalaftjr/app-medicos-mundo.git
+git branch -M main
+git push -u origin main
 ```
 
 ## Publicacao pelo GitHub Desktop
@@ -41,7 +42,10 @@ git push -u origin feature/pep-architecture-v2
 
 ## Link recomendado para enviar aos professores
 
-Apos publicar, envie o link do repositorio e destaque estes arquivos:
+Apos publicar, envie o link do repositorio, o link do sistema em producao e destaque estes arquivos:
+
+- Repositorio: `https://github.com/Andalaftjr/app-medicos-mundo`
+- Sistema publicado: `https://app-medicos.vercel.app/`
 
 - `README.md`
 - `docs/RELATORIO_ATIVIDADE_EXTENSIONISTA.md`

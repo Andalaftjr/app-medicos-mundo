@@ -4,6 +4,12 @@ Ferramenta web responsiva desenvolvida para apoiar a Medicos do Mundo em acoes h
 
 O projeto foi produzido como parte da disciplina **Atividade Extensionista II: Tecnologia Aplicada a Inclusao Digital - Projeto**, do curso **CST em Analise e Desenvolvimento de Sistemas**.
 
+## Status de aplicacao
+
+O sistema foi desenvolvido, aplicado e utilizado inicialmente nas acoes da Medicos do Mundo em Santos-SP. A partir do uso em campo e da satisfacao relatada pelos voluntarios com a organizacao do fluxo, a ferramenta foi expandida para Itanhaem-SP, onde tambem ja foi utilizada. No momento, o projeto encontra-se em fase de entrega final das versoes documentadas, com o sistema funcional, evidencias anonimizadas e documentacao academica preparada para avaliacao.
+
+Versao publicada: [https://app-medicos.vercel.app/](https://app-medicos.vercel.app/)
+
 ## Objetivo
 
 Organizar o fluxo de acolhimento, cadastro, triagem, censo social, fila de espera, atendimentos multiprofissionais, dashboards e exportacao de dados durante acoes presenciais da Medicos do Mundo.
@@ -47,13 +53,33 @@ As imagens abaixo foram anonimizadas para evitar exposicao de dados pessoais, em
 
 ![Dashboard operacional](docs/evidencias/dashboard-operacional-sanitizado.png)
 
+### Indicadores operacionais
+
+![Indicadores operacionais](docs/evidencias/indicadores-operacionais-sanitizado.png)
+
+### Fluxo de assistidos
+
+![Fluxo de assistidos](docs/evidencias/fluxo-assistidos-sanitizado.png)
+
+### Ficha do assistido
+
+![Ficha do assistido](docs/evidencias/ficha-assistido-sanitizado.png)
+
 ### Triagem
 
 ![Triagem sanitizada](docs/evidencias/triagem-sanitizada.png)
 
+### Priorizacao e atencao inclusiva
+
+![Priorizacao e atencao inclusiva](docs/evidencias/triagem-prioridade-sanitizada.png)
+
 ### Censo social
 
 ![Censo social sanitizado](docs/evidencias/censo-social-sanitizado.png)
+
+### Uso de substancias no censo
+
+![Uso de substancias](docs/evidencias/censo-substancias-sanitizado.png)
 
 ## Documentacao academica
 
