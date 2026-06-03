@@ -30,6 +30,26 @@ git branch -M main
 git push -u origin main
 ```
 
+## Liberar push por chave SSH do repositorio
+
+Se o terminal retornar `Permission denied (publickey)`, use a tela do proprio repositorio que aparece em `https://github.com/Andalaftjr/app-medicos-mundo/settings`.
+
+No menu lateral do repositorio:
+
+1. Acesse **Deploy keys**.
+2. Clique em **Add deploy key**.
+3. Em **Title**, use `Codex app-medicos-mundo`.
+4. Em **Key**, cole a chave publica gerada localmente.
+5. Marque **Allow write access**.
+6. Clique em **Add key**.
+7. Execute novamente `git push -u origin main`.
+
+Chave publica gerada para este projeto:
+
+```text
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEgmFUt5fFcn7s2GgqW49YmpBFzwq5UnsTotG+aOsRT2 andalaftjr@app-medicos-mundo
+```
+
 ## Publicacao pelo GitHub Desktop
 
 1. Abra o GitHub Desktop.
@@ -68,9 +88,13 @@ Como o projeto usa React/Vite, as importacoes corretas sao:
 
 Nao use os exemplos de Next.js com `/next` neste projeto.
 
-No painel da Vercel, abra o projeto `app-medicos` e habilite:
+No painel atual da Vercel, a tela de Analytics pode aparecer como **Get Started**, com as etapas de instalar pacote, adicionar componente e fazer deploy. Neste projeto, as duas primeiras etapas ja estao concluidas no codigo.
 
-1. **Analytics > Enable** para registrar visitantes e visualizacoes de pagina.
-2. **Speed Insights > Enable** para registrar metricas de performance.
+Fluxo correto:
 
-Apos o proximo deploy, a Vercel passara a expor as rotas internas de medicao, como `/_vercel/insights/*` e `/_vercel/speed-insights/*`. Os dados aparecerao nos dashboards depois que houver visitas reais ao site.
+1. Publique os commits no GitHub.
+2. Aguarde o redeploy automatico da Vercel ou acione novo deploy pelo painel.
+3. Acesse `https://app-medicos.vercel.app/` apos o deploy para gerar visitas.
+4. Volte em **Analytics** e **Speed Insights**.
+
+Apos o proximo deploy, a Vercel passara a expor rotas internas de medicao, como `/_vercel/insights/*` e `/_vercel/speed-insights/*`. Os dados aparecerao nos dashboards depois que houver visitas reais ao site.

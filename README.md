@@ -112,12 +112,17 @@ Como esta aplicacao usa React com Vite, as importacoes corretas sao:
 - `@vercel/analytics/react` para Web Analytics;
 - `@vercel/speed-insights/react` para Speed Insights.
 
-Para concluir a coleta de metricas, habilite os recursos no painel da Vercel do projeto `app-medicos`:
+No painel atual da Vercel, a tela de Analytics pode aparecer como **Get Started**. Isso significa que a Vercel ainda nao detectou um deploy contendo o pacote e o componente.
 
-- **Analytics > Enable** para visitantes e page views.
-- **Speed Insights > Enable** para metricas de performance.
+Fluxo correto:
 
-Depois do proximo deploy, a Vercel passara a inserir as rotas internas de medicao e os dados aparecerao nos dashboards apos visitas reais ao site.
+1. Mantenha o framework selecionado como React/Vite ou use as instrucoes de React, nao as de Next.js.
+2. Publique estes commits no GitHub.
+3. Aguarde o redeploy da Vercel ou acione um novo deploy pelo painel.
+4. Acesse `https://app-medicos.vercel.app/` algumas vezes apos o deploy.
+5. Volte em **Analytics** e **Speed Insights**. Os paineis passam a mostrar dados quando a Vercel detectar os scripts e houver visitas reais.
+
+A Vercel podera expor rotas internas como `/_vercel/insights/*` e `/_vercel/speed-insights/*` depois do deploy.
 
 ## Configuracao Firebase
 
