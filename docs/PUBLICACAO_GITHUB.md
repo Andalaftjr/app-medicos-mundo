@@ -51,3 +51,16 @@ Apos publicar, envie o link do repositorio, o link do sistema em producao e dest
 - `docs/RELATORIO_ATIVIDADE_EXTENSIONISTA.md`
 - `docs/DIAGRAMAS.md`
 - `docs/EVIDENCIAS.md`
+
+## Vercel Speed Insights
+
+O codigo do projeto ja inclui:
+
+- dependencia `@vercel/speed-insights`;
+- componente `<SpeedInsights />` no arquivo `src/main.jsx`;
+- dependencia `@vercel/analytics`;
+- componente `<Analytics />` no arquivo `src/main.jsx`.
+
+Como o projeto usa React/Vite, a importacao correta e `@vercel/speed-insights/react`, nao `@vercel/speed-insights/next`.
+
+No painel da Vercel, abra o projeto `app-medicos`, acesse **Speed Insights** no menu lateral e clique em **Enable**. Apos o proximo deploy, a Vercel passara a expor as rotas internas de medicao e os dados aparecerao no dashboard depois que houver visitas reais ao site.

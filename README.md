@@ -43,6 +43,7 @@ O sistema foi modelado para separar indicadores e prontuarios por **local da aca
 | Backend | Firebase Authentication, Cloud Firestore, Cloud Functions |
 | Seguranca | Firestore Security Rules, validacao de e-mail, RBAC |
 | Exportacao | write-excel-file |
+| Publicacao e metricas | Vercel, Vercel Analytics, Vercel Speed Insights |
 | Qualidade | ESLint, build Vite |
 
 ## Evidencias visuais
@@ -101,6 +102,12 @@ Para validar antes de publicar:
 npm run lint
 npm run build
 ```
+
+## Vercel Speed Insights
+
+O projeto ja possui os pacotes `@vercel/analytics` e `@vercel/speed-insights` instalados e os componentes globais configurados em `src/main.jsx`.
+
+Para concluir a coleta de metricas, habilite o recurso no painel da Vercel do projeto `app-medicos`. Depois do proximo deploy, a Vercel passara a inserir as rotas de medicao e o script de performance da aplicacao.
 
 ## Configuracao Firebase
 
