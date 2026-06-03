@@ -52,15 +52,25 @@ Apos publicar, envie o link do repositorio, o link do sistema em producao e dest
 - `docs/DIAGRAMAS.md`
 - `docs/EVIDENCIAS.md`
 
-## Vercel Speed Insights
+## Vercel Web Analytics e Speed Insights
 
 O codigo do projeto ja inclui:
 
-- dependencia `@vercel/speed-insights`;
-- componente `<SpeedInsights />` no arquivo `src/main.jsx`;
 - dependencia `@vercel/analytics`;
 - componente `<Analytics />` no arquivo `src/main.jsx`.
+- dependencia `@vercel/speed-insights`;
+- componente `<SpeedInsights />` no arquivo `src/main.jsx`;
 
-Como o projeto usa React/Vite, a importacao correta e `@vercel/speed-insights/react`, nao `@vercel/speed-insights/next`.
+Como o projeto usa React/Vite, as importacoes corretas sao:
 
-No painel da Vercel, abra o projeto `app-medicos`, acesse **Speed Insights** no menu lateral e clique em **Enable**. Apos o proximo deploy, a Vercel passara a expor as rotas internas de medicao e os dados aparecerao no dashboard depois que houver visitas reais ao site.
+- `@vercel/analytics/react` para Web Analytics;
+- `@vercel/speed-insights/react` para Speed Insights.
+
+Nao use os exemplos de Next.js com `/next` neste projeto.
+
+No painel da Vercel, abra o projeto `app-medicos` e habilite:
+
+1. **Analytics > Enable** para registrar visitantes e visualizacoes de pagina.
+2. **Speed Insights > Enable** para registrar metricas de performance.
+
+Apos o proximo deploy, a Vercel passara a expor as rotas internas de medicao, como `/_vercel/insights/*` e `/_vercel/speed-insights/*`. Os dados aparecerao nos dashboards depois que houver visitas reais ao site.

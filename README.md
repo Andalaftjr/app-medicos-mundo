@@ -103,11 +103,21 @@ npm run lint
 npm run build
 ```
 
-## Vercel Speed Insights
+## Vercel Analytics e Speed Insights
 
 O projeto ja possui os pacotes `@vercel/analytics` e `@vercel/speed-insights` instalados e os componentes globais configurados em `src/main.jsx`.
 
-Para concluir a coleta de metricas, habilite o recurso no painel da Vercel do projeto `app-medicos`. Depois do proximo deploy, a Vercel passara a inserir as rotas de medicao e o script de performance da aplicacao.
+Como esta aplicacao usa React com Vite, as importacoes corretas sao:
+
+- `@vercel/analytics/react` para Web Analytics;
+- `@vercel/speed-insights/react` para Speed Insights.
+
+Para concluir a coleta de metricas, habilite os recursos no painel da Vercel do projeto `app-medicos`:
+
+- **Analytics > Enable** para visitantes e page views.
+- **Speed Insights > Enable** para metricas de performance.
+
+Depois do proximo deploy, a Vercel passara a inserir as rotas internas de medicao e os dados aparecerao nos dashboards apos visitas reais ao site.
 
 ## Configuracao Firebase
 
