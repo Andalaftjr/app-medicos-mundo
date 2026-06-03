@@ -84,6 +84,8 @@ As imagens abaixo foram anonimizadas para evitar exposicao de dados pessoais, em
 
 ## Documentacao academica
 
+- [Documento final em Word](docs/ATIVIDADE_EXTENSIONISTA_II_TRABALHO_FINAL_LEANDRO_ANDALAFT.docx)
+- [Documento final em PDF](docs/ATIVIDADE_EXTENSIONISTA_II_TRABALHO_FINAL_LEANDRO_ANDALAFT.pdf)
 - [Relatorio da Atividade Extensionista](docs/RELATORIO_ATIVIDADE_EXTENSIONISTA.md)
 - [Diagramas do Projeto](docs/DIAGRAMAS.md)
 - [Evidencias de Desenvolvimento e Aplicacao](docs/EVIDENCIAS.md)
