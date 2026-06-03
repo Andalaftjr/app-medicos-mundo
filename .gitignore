@@ -24,3 +24,17 @@ dist-ssr
 *.sw?
 
 .vercel
+
+# Secrets and local Firebase admin credentials
+.env
+.env.*
+!.env.example
+*firebase-adminsdk*.json
+*-firebase-adminsdk-*.json
+
+# Local exports/backups with sensitive operational data
+backups/
+qa-artifacts/
+
+# Firebase local cache
+.firebase/

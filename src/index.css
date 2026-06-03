@@ -1,1 +1,173 @@
 @import "tailwindcss";
+
+:root {
+  --mdm-field-label-color: #667085;
+  --mdm-field-label-size: 0.625rem;
+  --mdm-field-label-spacing: 0.08em;
+  --mdm-section-label-size: 0.7rem;
+  --mdm-section-label-spacing: 0.12em;
+}
+
+.mdm-auto-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-width: 0;
+  width: 100%;
+}
+
+.mdm-auto-field::before {
+  content: attr(data-field-label);
+  margin-left: 0.55rem;
+  color: var(--mdm-field-label-color);
+  font-size: var(--mdm-field-label-size);
+  font-weight: 900;
+  letter-spacing: var(--mdm-field-label-spacing);
+  line-height: 1.45;
+  text-transform: uppercase;
+}
+
+form div[class*="space-y-"] > label:not([class*="flex"]):not([class*="border-l-2"]) + .mdm-auto-field::before {
+  color: #98a2b3 !important;
+  font-size: 0.6rem !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.04em !important;
+  line-height: 1.35 !important;
+  margin-top: -0.1rem;
+  text-transform: none !important;
+}
+
+form label[class*="text-gray-400"][class*="uppercase"],
+form label[class*="text-gray-500"][class*="uppercase"],
+form div[class*="space-y-"] > label:not([class*="flex"]):not([class*="border-l-2"]) {
+  color: var(--mdm-field-label-color) !important;
+  display: block;
+  font-size: var(--mdm-field-label-size) !important;
+  font-weight: 900 !important;
+  letter-spacing: var(--mdm-field-label-spacing) !important;
+  line-height: 1.45 !important;
+  margin-left: 0.55rem !important;
+  max-width: 34rem;
+  text-transform: uppercase !important;
+}
+
+label[class*="uppercase"]:not([class*="flex"]):not([class*="border-l-2"]) {
+  font-size: var(--mdm-field-label-size) !important;
+  font-weight: 900 !important;
+  letter-spacing: var(--mdm-field-label-spacing) !important;
+  line-height: 1.45 !important;
+}
+
+form label[class*="flex"][class*="items-center"],
+form label[class*="flex"][class*="items-start"] {
+  font-size: 0.66rem !important;
+  line-height: 1.4 !important;
+}
+
+form label[class*="border-l-2"] {
+  display: block;
+  font-size: var(--mdm-section-label-size) !important;
+  font-weight: 900 !important;
+  letter-spacing: var(--mdm-section-label-spacing) !important;
+  line-height: 1.35 !important;
+  margin-bottom: 0.95rem !important;
+  padding-left: 0.65rem !important;
+}
+
+form label[class*="border-l-2"] + .mdm-auto-field,
+form label[class*="border-l-2"] + .grid,
+form label[class*="border-l-2"] + .space-y-1,
+form label[class*="border-l-2"] + .space-y-2,
+form label[class*="border-l-2"] + .space-y-3,
+form label[class*="border-l-2"] + select,
+form label[class*="border-l-2"] + input,
+form label[class*="border-l-2"] + textarea {
+  margin-top: 0.75rem;
+}
+
+.grid > .mdm-auto-field,
+.flex > .mdm-auto-field {
+  min-width: 0;
+}
+
+.mdm-auto-field input,
+.mdm-auto-field select,
+.mdm-auto-field textarea,
+form div[class*="space-y-"] > input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+form div[class*="space-y-"] > select,
+form div[class*="space-y-"] > textarea {
+  font-size: 0.8rem !important;
+  line-height: 1.35 !important;
+}
+
+.mdm-auto-field input::placeholder,
+.mdm-auto-field textarea::placeholder,
+form input::placeholder,
+form textarea::placeholder {
+  color: #98a2b3;
+  font-weight: 800;
+  opacity: 1;
+}
+
+.mdm-field-help {
+  color: #8a93a3;
+  font-size: 0.64rem;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.mdm-question-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.mdm-question-field > label,
+.mdm-question-field > .mdm-question-label {
+  color: var(--mdm-field-label-color) !important;
+  font-size: var(--mdm-field-label-size) !important;
+  font-weight: 900 !important;
+  letter-spacing: var(--mdm-field-label-spacing) !important;
+  line-height: 1.5 !important;
+  margin-left: 0.55rem;
+  max-width: 34rem;
+  text-transform: uppercase !important;
+}
+
+.mdm-question-field > select,
+.mdm-question-field > input,
+.mdm-question-field > textarea {
+  font-size: 0.8rem !important;
+  line-height: 1.35 !important;
+}
+
+.mdm-question-field.is-risk > label,
+.mdm-question-field.is-risk > .mdm-question-label {
+  color: #b42318 !important;
+}
+
+p[class*="tracking-widest"],
+span[class*="tracking-widest"] {
+  letter-spacing: var(--mdm-field-label-spacing) !important;
+  line-height: 1.45 !important;
+}
+
+form p[class*="text-[7px]"],
+form p[class*="text-[8px]"] {
+  font-size: 0.64rem !important;
+  line-height: 1.45 !important;
+}
+
+@media (max-width: 420px) {
+  :root {
+    --mdm-field-label-size: 0.6rem;
+    --mdm-section-label-size: 0.66rem;
+  }
+
+  form div[class*="space-y-"] > label:not([class*="flex"]):not([class*="border-l-2"]),
+  .mdm-auto-field::before,
+  .mdm-question-field > label,
+  .mdm-question-field > .mdm-question-label {
+    letter-spacing: 0.06em !important;
+  }
+}

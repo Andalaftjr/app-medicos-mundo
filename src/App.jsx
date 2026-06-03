@@ -1,38 +1,33 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { initializeApp } from 'firebase/app';
+import { createContext, useState, useEffect, useRef, useMemo } from 'react';
 import { 
-  getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+  signInWithEmailAndPassword, createUserWithEmailAndPassword,
   onAuthStateChanged, signOut, sendPasswordResetEmail, sendEmailVerification
 } from 'firebase/auth';
 import { 
-  getFirestore, collection, onSnapshot, doc, setDoc, getDoc, getDocs, writeBatch
+  collection, onSnapshot, doc, setDoc, getDoc, getDocs,
+  query, where, limit, serverTimestamp
 } from 'firebase/firestore';
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import { ref as storageRef, uploadString, getDownloadURL } from 'firebase/storage';
 import { 
   Search, UserPlus, Stethoscope, History as HistoryIcon, 
   ArrowLeft, User, Calendar, CheckCircle, FileText, HeartPulse, 
-  Clock, AlertCircle, X, LogOut, Download, PieChart, Users, 
+  Clock, AlertCircle, X, LogOut, PieChart, Users,
   ChevronRight, Activity, Brain, Heart, Info, 
   UserCheck, Baby, HomeIcon, Dog, 
   Gift, Smile, HeartHandshake, MapPin, Navigation as NavigationIcon, IdCard, 
-  Edit3, Briefcase, Camera, Upload, FlipHorizontal, Star, Gavel,
-  ShieldCheck, Trash2, RefreshCw, UserCog, Mail, Phone
+  Edit3, Briefcase, Star, Gavel,
+  ShieldCheck, Trash2, RefreshCw, UserCog, Mail, Phone, Menu
 } from 'lucide-react';
+import { app, auth, db, storage } from './firebaseConfig';
+import PhotoHandler from './components/PhotoHandler';
+import PatientHeader from './components/PatientHeader';
+import DashboardView from './components/DashboardView';
 
-// --- CONFIGURAÇÃO DO FIREBASE ---
-const firebaseConfig = {
-  apiKey: "AIzaSyAOYOaDpe53z0B39lSRMVjmzXs6EA1udfY",
-  authDomain: "app-medicos-mundo.firebaseapp.com",
-  projectId: "app-medicos-mundo",
-  storageBucket: "app-medicos-mundo.firebasestorage.app",
-  messagingSenderId: "233128004767",
-  appId: "1:233128004767:web:f9f560912f83c20c5566aa",
-  measurementId: "G-2J6C4ENCYK"
-};
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-auth.languageCode = 'pt-BR';
-const db = getFirestore(app);
+const appFunctions = getFunctions(app, 'southamerica-east1');
+const updateUserAccessCallable = httpsCallable(appFunctions, 'updateUserAccess');
+const revokeUserAccessCallable = httpsCallable(appFunctions, 'revokeUserAccess');
+const ActionLocationContext = createContext(null);
 
 const BRAND = {
   navy: '#292f63',
@@ -61,12 +56,12 @@ const LISTA_COMORBIDADES = [
 const LISTA_PSIQUIATRIA = [
   "Ausência de diagnóstico",
   "Depressão", "TAG", "TOC", "Transtorno Bipolar", "Esquizofrenia", "Insônia", 
-  "Abstinência", "Ideação Suicida"
+  "Abstinência", "Ideação Suicida", "Borderline", "Outros: especifique"
 ];
 
 const LISTA_VICIOS = [
-  "Não faz uso de substância",
-  "Tabagista", "Etilista", "Maconha", "Crack", "Cocaína", "Lança perfume", 
+  "Não faz uso declarado",
+  "Tabaco", "Álcool", "Maconha", "Crack", "Cocaína", "Lança perfume",
   "Cola", "Ecstasy", "LSD", "Heroína"
 ];
 
@@ -90,6 +85,7 @@ const SINTOMAS_GINEC = [
 ];
 
 const PROGRAMAS_SOCIAIS = ["Centro POP", "CAPS", "CRAS", "Consultório na Rua", "Outros"];
+const FILIAIS_EQUIPE = ['Santos', 'São Paulo', 'Osasco'];
 const ACTION_LOCATIONS = [
   {
     value: 'santos_medicosdomundo',
@@ -98,7 +94,17 @@ const ACTION_LOCATIONS = [
     neighborhood: 'Paquetá',
     unit: 'medicosdomundo.santos',
   },
+  {
+    value: 'itanhaem_medicosdomundo',
+    label: 'Médicos do Mundo Itanhaém',
+    city: 'Itanhaém',
+    neighborhood: 'Belas Artes',
+    unit: 'medicosdomundo.itanhaem',
+  },
 ];
+const TENANT_INITIAL_LIMIT = 50;
+const USERS_INITIAL_LIMIT = 200;
+const REPORT_MAX_LIMIT = 5000;
 const TRIAGE_ATTENTION_OPTIONS = [
   'Situação crítica / risco imediato',
   'Pessoa desorientada ou confusa',
@@ -115,10 +121,23 @@ const TRIAGE_ATTENTION_OPTIONS = [
   'Precisa de acompanhante ou prioridade',
 ];
 
-const CATEGORIAS_DOACAO = ['Kit Higiene', 'Cobertor / Saco de Cama', 'Roupas (Frio)', 'Roupas (Geral)', 'Ração Pet', 'Água / Alimento', 'Medicamento (Receita)'];
-const CATEGORIAS_JUSTICA = ['Apoio Judicial', 'Documentação (2ª Via)', 'Previdenciário / Benefícios', 'Defesa Criminal', 'Familiar (Pensão/Guarda)', 'Orientação Geral'];
+const CATEGORIAS_DOACAO = ['Kit higiene', 'Roupas', 'Sapatos'];
+const CATEGORIAS_JUSTICA = ['Direito civil', 'Dúvida trabalhista', 'Orientação cível', 'Orientação eleitoral', 'Outro (especifique)'];
+const VACINAS_APLICADAS = ['Influenza', 'COVID-19', 'Tétano', 'Outras'];
+const RELIGIOES_CENSO = ['Não informado', 'Católica', 'Evangélica', 'Espírita', 'Umbanda/Candomblé', 'Matriz africana', 'Ateu/Agnóstico', 'Outra', 'Prefere não responder'];
+const TEMAS_ACONSELHAMENTO = ['Hábitos alimentares', 'Hidratação', 'Segurança alimentar', 'Diabetes/Hipertensão', 'Saúde mental', 'Adesão ao cuidado'];
+const LOCAIS_ENCAMINHAMENTO = ['UBS', 'CAPS', 'CRAS', 'Centro POP', 'Consultório na Rua', 'Policlínica', 'Rede parceira', 'Retorno próxima ação'];
+const MARCADORES_SEVERIDADE = [
+  'HIV', 'CANCER', 'CÂNCER', 'IDEAÇÃO SUICIDA', 'SUICIDA', 'TEA', 'AUTISMO',
+  'RISCO IMEDIATO', 'SITUAÇÃO CRÍTICA', 'CRÍTICA', 'VIOLÊNCIA', 'ABUSO',
+  'GESTANTE', 'TUBERCULOSE', 'TB', 'EPILEPSIA', 'EPILÉTICO', 'EPILEPTICO',
+  'CONVULSÃO', 'CONVULSAO', 'SÍNDROME DE DOWN', 'SINDROME DE DOWN', 'DOWN',
+  'DEFICIÊNCIA', 'DEFICIENCIA', 'MOBILIDADE REDUZIDA', 'DESORIENTADA',
+  'DESORIENTADO', 'CONFUSA', 'CONFUSO', 'CRIANÇA DESACOMPANHADA',
+  'CRIANCA DESACOMPANHADA',
+];
 const TIPOS_ALERGIA = ['Medicamentos', 'Alimentos', 'Outros'];
-const TIPOS_PETS = ['Cachorro', 'Gato', 'Aves', 'Outros'];
+const TIPOS_PETS = ['Cao', 'Gato', 'Outros'];
 const PERFIS_CADASTRAVEIS = [
   'voluntario_eficiente', 'colaborador_servico', 'academico', 'profissional_formado'
 ];
@@ -225,8 +244,8 @@ const DIAGNOSTICOS_POR_AREA = {
 const TEXTOS_CLINICOS = {
   'Medicina': { evolucaoLabel: "S - Subjetivo (História Clínica e Anamnese)", evolucaoPlace: "Queixa do paciente, evolução do quadro...", diagLabel: "A - Avaliação Médica / Diagnóstico", planoLabel: "P - Conduta / Plano Terapêutico", planoPlace: "Conduta, orientações, prescrição e encaminhamentos quando aplicável..." },
   'Odontologia': { evolucaoLabel: "Evolução Odontológica e Achados", evolucaoPlace: "Relato de dor, condição de higiene oral, dentes afetados...", diagLabel: "Diagnóstico Clínico Odontológico", planoLabel: "Conduta, Procedimento Realizado e Prescrição", planoPlace: "Ex: Exodontia, profilaxia, prescrição de analgésico..." },
-  'Psicologia': { evolucaoLabel: "Demanda e Escuta Qualificada", evolucaoPlace: "Motivo do acolhimento, estado de humor, pensamento...", diagLabel: "Hipótese Diagnóstica / Quadro Emocional", planoLabel: "Manejo Terapêutico e Encaminhamento", planoPlace: "Intervenção na crise, encaminhamento CAPS..." },
-  'Nutrição': { evolucaoLabel: "Avaliação Antropométrica e Recordatório", evolucaoPlace: "Relato de consumo, acesso a comida, aversões...", diagLabel: "Diagnóstico Nutricional Principal", planoLabel: "Plano Alimentar e Orientação Nutricional", planoPlace: "Orientações possíveis para a realidade de rua..." },
+  'Psicologia': { evolucaoLabel: "Demanda e Escuta Qualificada", evolucaoPlace: "Motivo do acolhimento, estado de humor, pensamento...", diagLabel: "Sinais clínicos e comportamentais relevantes", planoLabel: "Manejo Terapêutico e Encaminhamento", planoPlace: "Intervenção na crise, encaminhamento CAPS..." },
+  'Nutrição': { evolucaoLabel: "Avaliação Antropométrica e Recordatório", evolucaoPlace: "Relato de consumo, acesso a comida, aversões...", diagLabel: "Estado Nutricional Aparente", planoLabel: "Plano Alimentar e Orientação Nutricional", planoPlace: "Orientações possíveis para a realidade de rua..." },
   'Fisioterapia': { evolucaoLabel: "Avaliação Físico-Funcional e Dor", evolucaoPlace: "História da dor, inspeção postural, palpação...", diagLabel: "Diagnóstico Cinesiológico Funcional", planoLabel: "Conduta Fisioterapêutica Realizada", planoPlace: "Alongamentos, terapia manual, orientações posturais..." },
   'Enfermagem': { evolucaoLabel: "Evolução de Enfermagem e Procedimentos", evolucaoPlace: "Descrição do estado geral, aspecto das lesões/feridas...", diagLabel: "Diagnóstico de Enfermagem", planoLabel: "Cuidados Prestados e Orientações", planoPlace: "Curativo com técnica asséptica, medicação IM/IV..." },
   'Biomedicina': { evolucaoLabel: "Descrição das Amostras Coletadas", evolucaoPlace: "Tipos de exames solicitados ou recolhidos hoje...", diagLabel: "Resultados / Alterações Evidentes", planoLabel: "Laudo Laboratorial e Orientação", planoPlace: "Valores de referência encontrados, encaminhamento urgente..." }
@@ -242,6 +261,66 @@ const safeIncludes = (strOrArray, item) => {
 };
 const requiredText = (value) => String(value || '').trim();
 const profileDisplayName = (profile) => formatName(profile?.nomeSocial || profile?.nome || '');
+const isInactiveRecord = (record) => normalizeStr(record?.status) === 'inativo';
+const assistidoDisplayName = (assistido) => (
+  requiredText(assistido?.nomeSocial)
+  || requiredText(assistido?.nome)
+  || requiredText(assistido?.nomeCivil)
+  || 'Nome não informado'
+);
+const assistidoSearchText = (assistido) => normalizeStr([
+  assistido?.nome,
+  assistido?.nomeCivil,
+  assistido?.nomeSocial,
+  assistido?.cpf,
+  assistido?.rg,
+].filter(Boolean).join(' '));
+const isTestAssistido = (record) => assistidoSearchText(record).includes('teste');
+const activeRows = (rows) => rows.filter(row => !isInactiveRecord(row));
+const snapshotRows = (snapshot) => snapshot.docs.map((document) => {
+  const data = document.data();
+  return { ...data, id: data.id || document.id };
+});
+const tenantCollectionQuery = (collectionName, location, maxRows = TENANT_INITIAL_LIMIT) => {
+  const constraints = [where('localAcao', '==', location)];
+  if (maxRows) constraints.push(limit(maxRows));
+  return query(collection(db, collectionName), ...constraints);
+};
+const patientScopedQuery = (collectionName, location, assistidoId) => query(
+  collection(db, collectionName),
+  where('localAcao', '==', location),
+  where('assistidoId', '==', assistidoId)
+);
+const mergePatientScopedRows = (currentRows, loadedRows, assistidoId) => [
+  ...currentRows.filter(row => String(row.assistidoId) !== String(assistidoId)),
+  ...loadedRows,
+];
+const upsertRowById = (rows, row) => {
+  if (!row?.id) return rows;
+  const rowId = String(row.id);
+  let found = false;
+  const nextRows = rows.map(current => {
+    if (String(current.id) !== rowId) return current;
+    found = true;
+    return { ...current, ...row };
+  });
+  return found ? nextRows : [row, ...nextRows];
+};
+const mergeSnapshotRows = (currentRows, incomingRows) => {
+  const inactiveIds = new Set(incomingRows.filter(isInactiveRecord).map(row => String(row.id)));
+  const nextById = new Map(
+    currentRows
+      .filter(row => !inactiveIds.has(String(row.id)) && !isInactiveRecord(row))
+      .map(row => [String(row.id), row])
+  );
+
+  activeRows(incomingRows).forEach(row => {
+    const rowId = String(row.id);
+    nextById.set(rowId, { ...(nextById.get(rowId) || {}), ...row });
+  });
+
+  return Array.from(nextById.values());
+};
 const recordTime = (record) => {
   const time = Number(record?.ultimoAtendimentoEm || record?.dataCriacaoEm || record?.id || 0);
   return Number.isFinite(time) ? time : 0;
@@ -260,6 +339,51 @@ const hourLabel = (timestamp) => {
   const time = Number(timestamp || 0);
   if (!time || !Number.isFinite(time)) return 'Horário não registrado';
   return new Date(time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+};
+const formatClinicalDate = (timestamp) => {
+  if (!timestamp) return 'Data não registrada';
+  const numeric = Number(timestamp);
+  const date = timestamp?.toDate ? timestamp.toDate() : new Date(Number.isFinite(numeric) && numeric > 1000000000 ? numeric : timestamp);
+  if (Number.isNaN(date.getTime())) return exportValue(timestamp);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  const sameDay = (left, right) => left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth()
+    && left.getDate() === right.getDate();
+  if (sameDay(date, today)) return 'HOJE';
+  if (sameDay(date, yesterday)) return 'Ontem';
+  return date.toLocaleDateString('pt-BR');
+};
+const calculateImc = (peso, alturaCm) => {
+  const weight = Number(String(peso || '').replace(',', '.'));
+  const heightCm = Number(String(alturaCm || '').replace(',', '.'));
+  const height = heightCm > 3 ? heightCm / 100 : heightCm;
+  if (!weight || !height || !Number.isFinite(weight) || !Number.isFinite(height)) return '';
+  return (weight / (height * height)).toFixed(2);
+};
+const hasSevereMarker = (...values) => {
+  const joined = normalizeStr(values.flat().filter(Boolean).join(' '));
+  return MARCADORES_SEVERIDADE.some(marker => joined.includes(normalizeStr(marker)));
+};
+const isSpecialCareSignal = (value) => {
+  const text = normalizeStr(value);
+  if (!text) return false;
+  return hasSevereMarker(value)
+    || [
+      'uso de substancia com alteracao importante',
+      'substancia com alteracao importante',
+      'dificuldade de fala',
+      'dificuldade de comunicacao',
+      'deficiencia auditiva',
+      'deficiencia visual',
+      'pessoa idosa fragil',
+      'idosa fragil',
+      'idoso fragil',
+      'precisa de acompanhante',
+      'precisa de prioridade',
+      'acompanhante ou prioridade',
+    ].some(marker => text.includes(marker));
 };
 const roleLabel = (role) => ROLE_LABELS[role] || ROLE_LABELS[LEGACY_ROLE_PROFESSION[role] ? 'profissional_formado' : role] || role || 'Perfil';
 const professionLabel = (profession) => PROFESSION_LABELS[profession] || profession || 'Área não informada';
@@ -354,9 +478,9 @@ const completionLabel = (percent) => {
   return 'Completo';
 };
 const triageCompletion = (triagem) => {
-  const fields = ['pa', 'fc', 'fr', 'spo2', 'peso', 'altura', 'encaminhamento'];
+  const fields = ['queixaPrincipal', 'pa', 'fc', 'fr', 'spo2', 'temperatura', 'peso', 'altura', 'imc', 'estadoNutricionalAparente', 'encaminhamento'];
   const percent = percentFromFields(triagem, fields);
-  const vitalFields = ['pa', 'fc', 'fr', 'spo2', 'peso', 'altura'];
+  const vitalFields = ['pa', 'fc', 'fr', 'spo2', 'temperatura', 'peso', 'altura'];
   const vitalsPercent = percentFromFields(triagem, vitalFields);
   const status = vitalsPercent === 0 && requiredText(triagem?.encaminhamento)
     ? 'Parcial - sem sinais vitais'
@@ -366,14 +490,15 @@ const triageCompletion = (triagem) => {
 const triagePriority = (triagem) => {
   const signals = compactList(triagem?.sinaisAtencao)
     .filter(signal => !normalizeStr(signal).includes('sem atencao'));
+  const prioritySignals = signals.filter(isSpecialCareSignal);
   const selected = normalizeStr(triagem?.prioridadeCuidado);
   const hasCriticalSignal = signals.some(signal => normalizeStr(signal).includes('situacao critica')
     || normalizeStr(signal).includes('risco imediato'));
-  if (hasCriticalSignal || selected.includes('critica')) {
-    return { level: 'critical', label: 'Crítica', reasons: signals };
+  if (hasCriticalSignal || selected.includes('critica') || hasSevereMarker(signals, triagem?.observacaoAtencao, triagem?.observacaoCrianca)) {
+    return { level: 'critical', label: 'Crítica', reasons: prioritySignals.length ? prioritySignals : signals };
   }
-  if (signals.length || selected.includes('prioridade')) {
-    return { level: 'priority', label: 'Atenção especial', reasons: signals };
+  if (prioritySignals.length || selected.includes('prioridade')) {
+    return { level: 'priority', label: 'Atenção especial', reasons: prioritySignals.length ? prioritySignals : ['Prioridade marcada na triagem'] };
   }
   return { level: 'routine', label: triagem ? 'Rotina' : 'Aguardando triagem', reasons: [] };
 };
@@ -498,6 +623,27 @@ const buildExportSheet = (sheet, columns, rows, options = {}) => {
 
 const exportPercent = (count, total) => `${total ? Math.round((count / total) * 100) : 0}%`;
 const dateInputToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+const DAILY_LOCATION_STORAGE_KEY = 'mdmActionLocationDaily';
+const isInlinePhoto = (value) => requiredText(value).startsWith('data:image/');
+const uploadPhotoIfNeeded = async (photoValue, folder, recordId) => {
+  const photo = requiredText(photoValue);
+  if (!photo || !isInlinePhoto(photo)) return photo;
+  const target = storageRef(storage, `${folder}/${recordId}-${Date.now()}.jpg`);
+  await uploadString(target, photo, 'data_url', { contentType: 'image/jpeg' });
+  return getDownloadURL(target);
+};
+const readDailyActionLocation = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DAILY_LOCATION_STORAGE_KEY) || '{}');
+    return parsed.date === dateInputToday() ? parsed.value || '' : '';
+  } catch {
+    return '';
+  }
+};
+const writeDailyActionLocation = (value) => {
+  localStorage.setItem(DAILY_LOCATION_STORAGE_KEY, JSON.stringify({ date: dateInputToday(), value }));
+  localStorage.setItem('mdmActionLocation', value);
+};
 const displayDateFromInput = (value) => {
   const [year, month, day] = String(value || '').split('-');
   return year && month && day ? `${day}/${month}/${year}` : new Date().toLocaleDateString('pt-BR');
@@ -688,111 +834,8 @@ const calculateAgeNum = (dob) => {
 };
 const calculateAge = (dob) => {
   const age = calculateAgeNum(dob);
-  return age ? `${age} anos` : 'N/A';
+  return age ? `${age} anos` : 'Não informado';
 };
-
-// --- COMPONENTE DE CÂMERA ---
-function PhotoHandler({ onPhotoCaptured, currentPhoto }) {
-  const [isCameraOpen, setIsCameraOpen] = useState(false);
-  const [facingMode, setFacingMode] = useState('user'); 
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-
-  useEffect(() => {
-    if (!isCameraOpen) return undefined;
-
-    let stream;
-    navigator.mediaDevices.getUserMedia({ video: { facingMode } })
-      .then((mediaStream) => {
-        stream = mediaStream;
-        if (videoRef.current) videoRef.current.srcObject = mediaStream;
-      })
-      .catch((err) => console.error("Erro camera:", err));
-
-    return () => stream?.getTracks().forEach(track => track.stop());
-  }, [isCameraOpen, facingMode]);
-
-  const takePhoto = () => {
-    const context = canvasRef.current.getContext('2d');
-    context.drawImage(videoRef.current, 0, 0, 400, 400);
-    const data = canvasRef.current.toDataURL('image/jpeg', 0.8);
-    onPhotoCaptured(data);
-    stopCamera();
-  };
-
-  const captureUploadedPhoto = (file) => {
-    if (!file?.type.startsWith('image/')) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const image = new Image();
-      image.onload = () => {
-        const outputSize = 400;
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        const cropSize = Math.min(image.width, image.height);
-        canvas.width = outputSize;
-        canvas.height = outputSize;
-        context.drawImage(
-          image,
-          (image.width - cropSize) / 2,
-          (image.height - cropSize) / 2,
-          cropSize,
-          cropSize,
-          0,
-          0,
-          outputSize,
-          outputSize
-        );
-        onPhotoCaptured(canvas.toDataURL('image/jpeg', 0.78));
-      };
-      image.onerror = () => console.error('Nao foi possivel processar a foto enviada.');
-      image.src = reader.result;
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const stopCamera = () => {
-    const stream = videoRef.current?.srcObject;
-    stream?.getTracks().forEach(track => track.stop());
-    setIsCameraOpen(false);
-  };
-
-  return (
-    <div className="flex flex-col items-center gap-3 py-2">
-      <div className="relative w-20 h-20 bg-gray-100 rounded-2xl border-2 border-blue-100 shadow-inner overflow-hidden group">
-        {currentPhoto ? (
-          <img src={currentPhoto} className="w-full h-full object-cover" alt="Avatar" />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-gray-300"><User size={30}/></div>
-        )}
-      </div>
-      <div className="flex gap-2">
-        <button type="button" title="Usar câmera" aria-label="Usar câmera para foto" onClick={() => setIsCameraOpen(true)} className="p-2 bg-[#292f63] text-white rounded-lg shadow-md active:scale-90"><Camera size={14}/></button>
-        <label title="Enviar foto" aria-label="Enviar foto do dispositivo" className="p-2 bg-emerald-600 text-white rounded-lg shadow-md cursor-pointer active:scale-90">
-          <Upload size={14}/><input type="file" className="hidden" accept="image/*" onChange={(e) => {
-            captureUploadedPhoto(e.target.files[0]);
-          }}/>
-        </label>
-      </div>
-
-      {isCameraOpen && (
-        <div className="fixed inset-0 z-[300] bg-black flex flex-col items-center justify-center p-4">
-          <video ref={videoRef} autoPlay playsInline className="w-full max-w-sm rounded-3xl border-2 border-white shadow-2xl mb-4" />
-          <div className="flex items-center gap-8 bg-gray-900 px-8 py-4 rounded-full">
-            <button type="button" aria-label="Cancelar foto" onClick={stopCamera} className="text-red-400 p-2"><X size={28}/></button>
-            <button type="button" aria-label="Capturar foto" onClick={takePhoto} className="p-4 bg-emerald-600 text-white rounded-full border-4 border-white shadow-xl"><Camera size={32}/></button>
-            <button type="button" aria-label="Alternar câmera" onClick={() => {
-              const stream = videoRef.current?.srcObject;
-              stream?.getTracks().forEach(track => track.stop());
-              setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
-            }} className="text-blue-400 p-2"><FlipHorizontal size={28}/></button>
-          </div>
-          <canvas ref={canvasRef} width="400" height="400" className="hidden" />
-        </div>
-      )}
-    </div>
-  );
-}
 
 // --- APP PRINCIPAL ---
 export default function App() {
@@ -826,11 +869,23 @@ export default function App() {
   const [adminUserSearch, setAdminUserSearch] = useState('');
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
   const [adminActionUid, setAdminActionUid] = useState('');
+  const [editingManagedUser, setEditingManagedUser] = useState(null);
   const [queueMode, setQueueMode] = useState('aguardando');
   const [queueNow, setQueueNow] = useState(Date.now());
   const [profilePhotoDraft, setProfilePhotoDraft] = useState('');
-  const [selectedActionLocation, setSelectedActionLocation] = useState(() => localStorage.getItem('mdmActionLocation') || ACTION_LOCATIONS[0].value);
-  const currentActionLocation = ACTION_LOCATIONS.find(location => location.value === selectedActionLocation) || ACTION_LOCATIONS[0];
+  const [appSettings, setAppSettings] = useState({ actionLocations: [], filiaisEquipe: [] });
+  const [selectedActionLocation, setSelectedActionLocation] = useState(() => readDailyActionLocation());
+  const [actionLocationConfirmedToday, setActionLocationConfirmedToday] = useState(() => Boolean(readDailyActionLocation()));
+  const [showActionLocationModal, setShowActionLocationModal] = useState(false);
+  const [pendingActionLocation, setPendingActionLocation] = useState(() => readDailyActionLocation() || ACTION_LOCATIONS[0].value);
+  const [showAppMenu, setShowAppMenu] = useState(false);
+  const actionLocations = useMemo(() => (
+    Array.isArray(appSettings.actionLocations) && appSettings.actionLocations.length ? appSettings.actionLocations : ACTION_LOCATIONS
+  ), [appSettings.actionLocations]);
+  const filiaisEquipe = useMemo(() => (
+    Array.isArray(appSettings.filiaisEquipe) && appSettings.filiaisEquipe.length ? appSettings.filiaisEquipe : FILIAIS_EQUIPE
+  ), [appSettings.filiaisEquipe]);
+  const currentActionLocation = actionLocations.find(location => location.value === selectedActionLocation) || actionLocations[0] || ACTION_LOCATIONS[0];
   const signupInProgressRef = useRef(false);
   const mainScrollRef = useRef(null);
 
@@ -838,8 +893,66 @@ export default function App() {
   const [formToggles, setFormToggles] = useState({});
   const [vetPets, setVetPets] = useState([]);
 
+  const changeActionLocation = (locationValue, options = {}) => {
+    const nextValue = locationValue || actionLocations[0]?.value || ACTION_LOCATIONS[0].value;
+    if (options.confirm) {
+      writeDailyActionLocation(nextValue);
+      setActionLocationConfirmedToday(true);
+      setShowActionLocationModal(false);
+    }
+    setPendingActionLocation(nextValue);
+    if (nextValue === selectedActionLocation && !options.forceReload) return;
+    setSelectedActionLocation(nextValue);
+    setSelectedAssistido(null);
+    setSelectedAtendimento(null);
+    setAssistidos([]);
+    setAnamneses([]);
+    setTriagens([]);
+    setAtendimentos([]);
+    setManagedUsers([]);
+    setCurrentView('home');
+  };
+  const actionLocationContextValue = {
+    selectedActionLocation,
+    currentActionLocation,
+    setSelectedActionLocation: changeActionLocation,
+    actionLocations,
+  };
+
   useEffect(() => { setTimeout(() => setShowSplash(false), 2000); }, []);
-  useEffect(() => { localStorage.setItem('mdmActionLocation', selectedActionLocation); }, [selectedActionLocation]);
+  useEffect(() => {
+    if (!actionLocations.length) return;
+    const timer = window.setTimeout(() => {
+      if (!pendingActionLocation || !actionLocations.some(location => location.value === pendingActionLocation)) {
+        setPendingActionLocation(actionLocations[0].value);
+      }
+      if (selectedActionLocation && !actionLocations.some(location => location.value === selectedActionLocation)) {
+        setSelectedActionLocation('');
+        setActionLocationConfirmedToday(false);
+        setShowActionLocationModal(true);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [actionLocations, pendingActionLocation, selectedActionLocation]);
+  useEffect(() => {
+    if (!user) return undefined;
+    // Firebase settings hook: admins can update app_settings/operacional in the UI;
+    // the app consumes these values here while keeping hardcoded defaults as fallback.
+    const unsubscribeSettings = onSnapshot(doc(db, 'app_settings', 'operacional'), (snapshot) => {
+      if (!snapshot.exists()) {
+        setAppSettings({ actionLocations: [], filiaisEquipe: [] });
+        return;
+      }
+      const data = snapshot.data();
+      setAppSettings({
+        actionLocations: Array.isArray(data.actionLocations) ? data.actionLocations : [],
+        filiaisEquipe: Array.isArray(data.filiaisEquipe) ? data.filiaisEquipe : [],
+      });
+    }, () => {
+      setAppSettings({ actionLocations: [], filiaisEquipe: [] });
+    });
+    return () => unsubscribeSettings();
+  }, [user]);
   useEffect(() => {
     if (mainScrollRef.current) mainScrollRef.current.scrollTop = 0;
   }, [currentView]);
@@ -885,12 +998,15 @@ export default function App() {
         }
         
         if (docSnap.exists()) {
-          await setDoc(doc(db, 'users', u.uid), {
+          const profileData = docSnap.data();
+          const authProfilePatch = {
             email: u.email || '',
             emailVerified: u.emailVerified,
             ultimoLoginEm: new Date().toISOString(),
-          }, { merge: true });
-          setUserProfile({ ...docSnap.data(), email: u.email || '', emailVerified: u.emailVerified });
+          };
+          if (!requiredText(profileData.filial)) authProfilePatch.filial = 'Santos';
+          await setDoc(doc(db, 'users', u.uid), authProfilePatch, { merge: true });
+          setUserProfile({ ...profileData, ...authProfilePatch });
           setUser(u);
         } else {
           await signOut(auth);
@@ -904,27 +1020,63 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!user || !userProfile) return;
+    if (!user || !userProfile || !actionLocationConfirmedToday || !selectedActionLocation) return;
     const snapshotError = (err) => {
       console.error('Falha ao sincronizar dados:', err);
       setNotification('Nao foi possivel sincronizar os dados. Verifique a conexao e as permissoes.');
     };
-    const unsubA = onSnapshot(collection(db, 'assistidos'), (s) => setAssistidos(s.docs.map(d => d.data())), snapshotError);
-    const unsubB = onSnapshot(collection(db, 'anamneses'), (s) => setAnamneses(s.docs.map(d => d.data())), snapshotError);
-    const unsubC = onSnapshot(collection(db, 'triagens'), (s) => setTriagens(s.docs.map(d => d.data())), snapshotError);
-    const unsubD = onSnapshot(collection(db, 'atendimentos'), (s) => setAtendimentos(s.docs.map(d => d.data())), snapshotError);
+    const unsubA = onSnapshot(tenantCollectionQuery('assistidos', selectedActionLocation), (s) => {
+      const rows = snapshotRows(s);
+      setAssistidos(current => mergeSnapshotRows(current, rows));
+      setSelectedAssistido(current => {
+        if (!current?.id) return current;
+        const fresh = activeRows(rows).find(row => String(row.id) === String(current.id));
+        return fresh ? { ...current, ...fresh } : current;
+      });
+    }, snapshotError);
+    const unsubB = onSnapshot(tenantCollectionQuery('anamneses', selectedActionLocation), (s) => setAnamneses(current => mergeSnapshotRows(current, snapshotRows(s))), snapshotError);
+    const unsubC = onSnapshot(tenantCollectionQuery('triagens', selectedActionLocation), (s) => setTriagens(current => mergeSnapshotRows(current, snapshotRows(s))), snapshotError);
+    const unsubD = onSnapshot(tenantCollectionQuery('atendimentos', selectedActionLocation), (s) => setAtendimentos(current => mergeSnapshotRows(current, snapshotRows(s))), snapshotError);
     return () => { unsubA(); unsubB(); unsubC(); unsubD(); };
-  }, [user, userProfile]);
+  }, [user, userProfile, selectedActionLocation, actionLocationConfirmedToday]);
+
+  useEffect(() => {
+    if (!user || !userProfile || !actionLocationConfirmedToday || !selectedAssistido?.id) return undefined;
+    let cancelled = false;
+    const loadCompletePatientHistory = async () => {
+      try {
+        const [anamnesesSnap, triagensSnap, atendimentosSnap] = await Promise.all([
+          getDocs(patientScopedQuery('anamneses', selectedActionLocation, selectedAssistido.id)),
+          getDocs(patientScopedQuery('triagens', selectedActionLocation, selectedAssistido.id)),
+          getDocs(patientScopedQuery('atendimentos', selectedActionLocation, selectedAssistido.id)),
+        ]);
+        if (cancelled) return;
+        setAnamneses(current => mergePatientScopedRows(current, activeRows(snapshotRows(anamnesesSnap)), selectedAssistido.id));
+        setTriagens(current => mergePatientScopedRows(current, activeRows(snapshotRows(triagensSnap)), selectedAssistido.id));
+        setAtendimentos(current => mergePatientScopedRows(current, activeRows(snapshotRows(atendimentosSnap)), selectedAssistido.id));
+      } catch (err) {
+        console.error('Falha ao carregar historico completo do assistido:', err);
+        if (!cancelled) showMsg('Nao foi possivel carregar o historico completo deste assistido.');
+      }
+    };
+    loadCompletePatientHistory();
+    return () => { cancelled = true; };
+  }, [user, userProfile, selectedAssistido?.id, selectedActionLocation, actionLocationConfirmedToday]);
 
   // --- REGRAS DE ACESSO ---
   const canAccessArea = (area) => {
-    if (!userProfile) return false;
+    if (!area) return Boolean(userProfile);
+    return Boolean(userProfile);
+  };
+  const canWriteArea = (area) => {
+    if (!userProfile || !area) return false;
     if (isCoordinatorProfile(userProfile)) return true;
+    if (!['academico', 'profissional_formado'].includes(userProfile?.role) && !LEGACY_ROLE_PROFESSION[userProfile?.role]) return false;
     const allowedProfessions = AREA_ALLOWED_PROFESSIONS[area] || [];
     return allowedProfessions.includes(profileProfession(userProfile));
   };
   const canFinalizeArea = (area) => {
-    if (!canAccessArea(area)) return false;
+    if (!canWriteArea(area)) return false;
     if (isCoordinatorProfile(userProfile)) return true;
     if (userProfile?.role === 'academico') return false;
     if (AREAS_COM_VALIDACAO_PROFISSIONAL.includes(area)) return isProfessionalProfile(userProfile);
@@ -939,11 +1091,37 @@ export default function App() {
     || ['cadastro_triagem', ...ATUACOES_SAUDE_TRIAGEM].includes(profileProfession(userProfile));
   const canRecordCenso = isCoordinatorProfile(userProfile)
     || ['cadastro_triagem', 'servico_social', 'apoio_transversal', ...ATUACOES_SAUDE_TRIAGEM].includes(profileProfession(userProfile));
-  const accessibleAreas = TODAS_ESPECIALIDADES.filter(area => canAccessArea(area));
-  const canViewDashboard = Boolean(userProfile);
+  const accessibleAreas = TODAS_ESPECIALIDADES.filter(area => canWriteArea(area));
+  const canViewDashboard = isCoordinatorProfile(userProfile);
   const canExportReports = isCoordinatorProfile(userProfile);
   const canViewUsers = isCoordinatorProfile(userProfile);
   const canPromoteUsers = userProfile?.role === 'admin';
+  const canDeleteAssistido = userProfile?.role === 'admin';
+
+  useEffect(() => {
+    if (!user || !userProfile || !actionLocationConfirmedToday || currentView !== 'stats' || !canViewDashboard) return undefined;
+    let cancelled = false;
+    const loadDashboardDataset = async () => {
+      try {
+        const [assistidosSnap, anamnesesSnap, triagensSnap, atendimentosSnap] = await Promise.all([
+          getDocs(tenantCollectionQuery('assistidos', selectedActionLocation, REPORT_MAX_LIMIT)),
+          getDocs(tenantCollectionQuery('anamneses', selectedActionLocation, REPORT_MAX_LIMIT)),
+          getDocs(tenantCollectionQuery('triagens', selectedActionLocation, REPORT_MAX_LIMIT)),
+          getDocs(tenantCollectionQuery('atendimentos', selectedActionLocation, REPORT_MAX_LIMIT)),
+        ]);
+        if (cancelled) return;
+        setAssistidos(activeRows(snapshotRows(assistidosSnap)));
+        setAnamneses(activeRows(snapshotRows(anamnesesSnap)));
+        setTriagens(activeRows(snapshotRows(triagensSnap)));
+        setAtendimentos(activeRows(snapshotRows(atendimentosSnap)));
+      } catch (err) {
+        console.error('Falha ao carregar base completa do dashboard:', err);
+        if (!cancelled) setNotification('Dashboard parcial: nao foi possivel carregar a base completa agora.');
+      }
+    };
+    loadDashboardDataset();
+    return () => { cancelled = true; };
+  }, [user, userProfile, currentView, canViewDashboard, selectedActionLocation, actionLocationConfirmedToday]);
 
   const getAreaIcon = (area) => {
     switch(area) {
@@ -971,6 +1149,19 @@ export default function App() {
   };
 
   const showMsg = (m) => { setNotification(m); setTimeout(() => setNotification(''), 4000); };
+  const patchLocalAssistido = (assistidoId, patch) => {
+    if (!assistidoId) return;
+    setAssistidos(current => current.map(item => (
+      String(item.id) === String(assistidoId) ? { ...item, ...patch } : item
+    )));
+    setSelectedAssistido(current => (
+      current && String(current.id) === String(assistidoId) ? { ...current, ...patch } : current
+    ));
+  };
+  const syncLocalRecord = (setter, record) => {
+    if (!record?.id) return;
+    setter(current => upsertRowById(current, record));
+  };
   const saveSafely = async (saveAction, successMessage) => {
     if (isSaving) return false;
     setIsSaving(true);
@@ -992,7 +1183,7 @@ export default function App() {
     if (!canViewUsers || isLoadingUsers) return;
     setIsLoadingUsers(true);
     try {
-      const snapshot = await getDocs(collection(db, 'users'));
+      const snapshot = await getDocs(query(collection(db, 'users'), limit(USERS_INITIAL_LIMIT)));
       setManagedUsers(snapshot.docs.map(document => ({ uid: document.id, ...document.data() }))
         .sort((left, right) => String(right.ultimoLoginEm || right.lgpdAcceptedAt || '').localeCompare(String(left.ultimoLoginEm || left.lgpdAcceptedAt || ''))));
     } catch (err) {
@@ -1008,22 +1199,12 @@ export default function App() {
     if (!window.confirm(`Confirmar ${managedUser.email || managedUser.nome || 'usuario'} como ${label}?`)) return;
     setAdminActionUid(managedUser.uid);
     try {
-      const batch = writeBatch(db);
-      batch.set(doc(db, 'users', managedUser.uid), {
-        role,
-        roleUpdatedAt: new Date().toISOString(),
-        roleUpdatedBy: user.uid,
-      }, { merge: true });
-      batch.set(doc(collection(db, 'admin_audit')), {
-        action: 'role_update',
-        actorUid: user.uid,
-        actorRole: userProfile.role,
+      await updateUserAccessCallable({
         targetUid: managedUser.uid,
-        beforeRole: managedUser.role || '',
-        afterRole: role,
-        createdAt: new Date().toISOString(),
+        role,
+        profissao: profileProfession(managedUser) || 'apoio_operacional',
+        filial: managedUser.filial || 'Santos',
       });
-      await batch.commit();
       showMsg(`Perfil atualizado para ${label}.`);
       await loadManagedUsers();
     } catch (err) {
@@ -1040,24 +1221,133 @@ export default function App() {
     if (!window.confirm(`Revogar o acesso de ${managedUser.email || managedUser.nome || ''}? A pessoa deixara de entrar no app; a exclusao definitiva do login e feita no Console Firebase.`)) return;
     setAdminActionUid(managedUser.uid);
     try {
-      const batch = writeBatch(db);
-      batch.delete(doc(db, 'users', managedUser.uid));
-      batch.set(doc(collection(db, 'admin_audit')), {
-        action: 'access_revoke',
-        actorUid: user.uid,
-        actorRole: userProfile.role,
-        targetUid: managedUser.uid,
-        deletedRole: managedUser.role || '',
-        createdAt: new Date().toISOString(),
-      });
-      await batch.commit();
-      showMsg('Acesso revogado. Para apagar o login, remova-o tambem no Console Firebase.');
+      await revokeUserAccessCallable({ targetUid: managedUser.uid });
+      showMsg('Acesso revogado com auditoria. O login foi desabilitado quando permitido pelo Firebase.');
       await loadManagedUsers();
     } catch (err) {
       console.error('Falha ao excluir usuario:', err);
       showMsg('Nao foi possivel excluir este usuario.');
     } finally {
       setAdminActionUid('');
+    }
+  };
+  const updateManagedUser = async (event) => {
+    event.preventDefault();
+    if (!canPromoteUsers || !editingManagedUser?.uid || adminActionUid) return;
+    const fd = new FormData(event.currentTarget);
+    const updates = {
+      role: requiredText(fd.get('role')),
+      profissao: requiredText(fd.get('profissao')),
+      filial: requiredText(fd.get('filial')) || 'Santos',
+      roleUpdatedAt: new Date().toISOString(),
+      roleUpdatedBy: user.uid,
+      perfilAdminAtualizadoEm: new Date().toISOString(),
+    };
+    setAdminActionUid(editingManagedUser.uid);
+    try {
+      await updateUserAccessCallable({
+        targetUid: editingManagedUser.uid,
+        role: updates.role,
+        profissao: updates.profissao,
+        filial: updates.filial,
+      });
+      setManagedUsers(current => current.map(item => item.uid === editingManagedUser.uid ? { ...item, ...updates } : item));
+      setEditingManagedUser(null);
+      showMsg('Usuario atualizado pelo administrador.');
+    } catch (err) {
+      console.error('Falha ao atualizar usuario pelo admin:', err);
+      showMsg('Nao foi possivel atualizar este usuario.');
+    } finally {
+      setAdminActionUid('');
+    }
+  };
+  const persistOperationalSettings = async (updates, successMessage) => {
+    if (!canPromoteUsers) return;
+    try {
+      // Firebase settings write hook: admins persist localidade/filial in app_settings/operacional.
+      // Dashboards continuam filtrando por localAcao; filial e apenas origem do voluntario.
+      await setDoc(doc(db, 'app_settings', 'operacional'), {
+        actionLocations,
+        filiaisEquipe,
+        ...updates,
+        updatedAt: serverTimestamp(),
+        updatedBy: user.uid,
+      }, { merge: true });
+      showMsg(successMessage);
+    } catch (err) {
+      console.error('Falha ao salvar configuracoes operacionais:', err);
+      showMsg('Nao foi possivel salvar a configuracao operacional.');
+    }
+  };
+  const addFilialSetting = async (event) => {
+    event.preventDefault();
+    const fd = new FormData(event.currentTarget);
+    const filial = requiredText(fd.get('filial'));
+    if (!filial) return;
+    await persistOperationalSettings({
+      filiaisEquipe: [...new Set([...filiaisEquipe, filial])],
+    }, 'Filial adicionada.');
+    event.currentTarget.reset();
+  };
+  const removeFilialSetting = async (filial) => {
+    if (filiaisEquipe.length <= 1) {
+      showMsg('Mantenha pelo menos uma filial ativa.');
+      return;
+    }
+    await persistOperationalSettings({
+      filiaisEquipe: filiaisEquipe.filter(item => item !== filial),
+    }, 'Filial removida.');
+  };
+  const addActionLocationSetting = async (event) => {
+    event.preventDefault();
+    const fd = new FormData(event.currentTarget);
+    const label = requiredText(fd.get('label'));
+    const city = requiredText(fd.get('city'));
+    const neighborhood = requiredText(fd.get('neighborhood'));
+    const unit = requiredText(fd.get('unit')) || normalizeStr(`${label}.${city}`).replace(/\s+/g, '.');
+    if (!label || !city || !neighborhood) {
+      showMsg('Informe nome, cidade e bairro do local da acao.');
+      return;
+    }
+    const value = requiredText(fd.get('value')) || normalizeStr(`${label}_${city}_${neighborhood}`).replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    if (actionLocations.some(location => location.value === value)) {
+      showMsg('Ja existe local com este identificador.');
+      return;
+    }
+    await persistOperationalSettings({
+      actionLocations: [...actionLocations, { value, label, city, neighborhood, unit }],
+    }, 'Local de acao adicionado.');
+    event.currentTarget.reset();
+  };
+  const removeActionLocationSetting = async (value) => {
+    if (actionLocations.length <= 1) {
+      showMsg('Mantenha pelo menos um local de acao ativo.');
+      return;
+    }
+    await persistOperationalSettings({
+      actionLocations: actionLocations.filter(location => location.value !== value),
+    }, 'Local de acao removido.');
+  };
+  const handleDeleteAssistido = async (assistido) => {
+    if (!canDeleteAssistido || !assistido?.id || isSaving) return;
+    const typed = window.prompt(`Digite EXCLUIR para inativar o cadastro de ${assistidoDisplayName(assistido)}. O histórico será preservado para auditoria.`);
+    if (typed !== 'EXCLUIR') {
+      showMsg('Exclusao cancelada. Digite EXCLUIR exatamente para confirmar.');
+      return;
+    }
+    const saved = await saveSafely(
+      () => setDoc(doc(db, 'assistidos', assistido.id), {
+        status: 'inativo',
+        deletedAt: serverTimestamp(),
+        deletedBy: user.uid,
+        deletedByName: userProfile.nome,
+      }, { merge: true }),
+      'Assistido inativado com segurança.'
+    );
+    if (saved) {
+      setAssistidos(current => current.filter(item => String(item.id) !== String(assistido.id)));
+      setSelectedAssistido(null);
+      setCurrentView('home');
     }
   };
 
@@ -1078,6 +1368,11 @@ export default function App() {
 
   const navigateFromBottom = (view) => {
     if (!confirmFormExit()) return;
+    if (!actionLocationConfirmedToday) {
+      setShowActionLocationModal(true);
+      showMsg('Escolha a localidade da acao de hoje para continuar.');
+      return;
+    }
     if (view === 'stats' && !canViewDashboard) {
       showMsg('Não foi possível abrir o dashboard.');
       return;
@@ -1100,6 +1395,11 @@ export default function App() {
   };
 
   const goToFicha = (assistido) => {
+    if (!actionLocationConfirmedToday) {
+      setShowActionLocationModal(true);
+      showMsg('Escolha a localidade da acao de hoje para abrir prontuarios.');
+      return;
+    }
     setSelectedAssistido(assistido);
     setSelectedAtendimento(null);
     setDefaultArea('');
@@ -1120,6 +1420,7 @@ export default function App() {
       ...prev,
       farmaciaAtendimento: atendimento?.precisaFarmacia || 'Não',
       abordagemNutri: atendimento?.abordagem_nutri || '',
+      tipoCondutaPsicologia: atendimento?.tipoCondutaPsicologia || '',
     }));
     if (area === 'Veterinária' || area === 'Medicina Veterinaria') {
       setVetPets(atendimento?.vetPets || [{ id: 'novo-pet', nome: '', especie: '', situacao: '', avaliacao: '', conduta: '', diagVet: '' }]);
@@ -1140,6 +1441,8 @@ export default function App() {
       temPets: ana.pets && ana.pets !== 'Nega' ? 'Sim' : 'Não',
       temMac: ana.mac && ana.mac !== 'Não se aplica' ? 'Sim' : 'Não',
       temFreqSaude: ana.freqSaude || ana.freqSaudeResposta === 'Sim' ? 'Sim' : 'Não',
+      drogas: ana.drogas || 'Não faz uso declarado',
+      moradia: ana.moradia || '',
       motivoRua: ana.motivoRua || '',
       programas: ana.programas || '',
       abordagemNutri: '',
@@ -1152,6 +1455,15 @@ export default function App() {
       showMsg('Triagem direcionada à equipe cadastrada nessa atuação.');
       return;
     }
+    const hoje = new Date().toLocaleDateString('pt-BR');
+    const triagemHoje = triagens.find(t => String(t.assistidoId) === String(assistido.id) && t.data === hoje) || {};
+    setFormToggles(prev => ({
+      ...prev,
+      peso: triagemHoje.peso || '',
+      altura: triagemHoje.altura || '',
+      prioridadeCuidado: triagemHoje.prioridadeCuidado || 'Rotina',
+      usaMedicacaoTriagem: triagemHoje.usaMedicacaoTriagem || (triagemHoje.medicacaoUso && triagemHoje.medicacaoUso !== 'Não se aplica' ? 'Sim' : 'Não'),
+    }));
     setSelectedAssistido(assistido);
     setCurrentView('triagem');
   };
@@ -1183,12 +1495,24 @@ export default function App() {
 
     setIsExporting(true);
     try {
-      const assistidoById = new Map(assistidos.map(assistido => [String(assistido.id), assistido]));
+      const [assistidosSnap, anamnesesSnap, triagensSnap, atendimentosSnap] = await Promise.all([
+        getDocs(tenantCollectionQuery('assistidos', selectedActionLocation, REPORT_MAX_LIMIT)),
+        getDocs(tenantCollectionQuery('anamneses', selectedActionLocation, REPORT_MAX_LIMIT)),
+        getDocs(tenantCollectionQuery('triagens', selectedActionLocation, REPORT_MAX_LIMIT)),
+        getDocs(tenantCollectionQuery('atendimentos', selectedActionLocation, REPORT_MAX_LIMIT)),
+      ]);
+      const sourceAssistidos = activeRows(snapshotRows(assistidosSnap));
+      const sourceAnamneses = activeRows(snapshotRows(anamnesesSnap));
+      const sourceTriagens = activeRows(snapshotRows(triagensSnap));
+      const sourceAtendimentos = activeRows(snapshotRows(atendimentosSnap));
+      const reportAssistidos = sourceAssistidos.filter(row => !isTestAssistido(row));
+      const reportAssistidoIds = new Set(reportAssistidos.map(row => String(row.id)));
+      const assistidoById = new Map(reportAssistidos.map(assistido => [String(assistido.id), assistido]));
       const withAssistido = (record) => {
         const assistido = assistidoById.get(String(record.assistidoId)) || {};
         return {
           ...record,
-          assistidoNome: assistido.nome || 'Assistido nao localizado',
+          assistidoNome: assistidoDisplayName(assistido) || 'Assistido nao localizado',
           assistidoCpf: assistido.cpf || '',
           assistidoRg: assistido.rg || '',
         };
@@ -1196,11 +1520,11 @@ export default function App() {
       const localExportLabel = currentActionLocation.label;
       const exportTab = statTab === 'justiça' ? 'justica' : statTab;
       const theme = getExportTheme(exportTab);
-      const allAtendimentoRows = [...atendimentos].map(withAssistido).sort((a, b) => recordTime(b) - recordTime(a));
-      const allTriagemRows = [...triagens].map(withAssistido).sort((a, b) => recordTime(b) - recordTime(a));
-      const allCensoRows = [...anamneses].map(withAssistido).sort((a, b) => recordTime(b) - recordTime(a));
+      const allAtendimentoRows = sourceAtendimentos.filter(row => reportAssistidoIds.has(String(row.assistidoId))).map(withAssistido).sort((a, b) => recordTime(b) - recordTime(a));
+      const allTriagemRows = sourceTriagens.filter(row => reportAssistidoIds.has(String(row.assistidoId))).map(withAssistido).sort((a, b) => recordTime(b) - recordTime(a));
+      const allCensoRows = sourceAnamneses.filter(row => reportAssistidoIds.has(String(row.assistidoId))).map(withAssistido).sort((a, b) => recordTime(b) - recordTime(a));
       const dateScopeIds = new Set([
-        ...assistidos
+        ...reportAssistidos
           .filter(row => row.dataCriacao === reportDate || row.chegadaAcaoData === reportDate)
           .map(row => String(row.id)),
         ...allAtendimentoRows.filter(row => row.data === reportDate).map(row => String(row.assistidoId)),
@@ -1210,7 +1534,7 @@ export default function App() {
       const scopedAtendimentoRows = reportIsDateScoped ? allAtendimentoRows.filter(row => row.data === reportDate) : allAtendimentoRows;
       const scopedTriagemRows = reportIsDateScoped ? allTriagemRows.filter(row => row.data === reportDate) : allTriagemRows;
       const scopedCensoRows = reportIsDateScoped ? allCensoRows.filter(row => dateScopeIds.has(String(row.assistidoId))) : allCensoRows;
-      const scopedAssistidoRows = reportIsDateScoped ? assistidos.filter(row => dateScopeIds.has(String(row.id))) : assistidos;
+      const scopedAssistidoRows = reportIsDateScoped ? reportAssistidos.filter(row => dateScopeIds.has(String(row.id))) : reportAssistidos;
       const areaIs = (row, expected) => normalizeStr(row.area) === normalizeStr(expected);
       const isHealthArea = (row) => [
         'Medicina Humana', 'Odontologia', 'Psicologia', 'Nutricao', 'Fisioterapia',
@@ -1269,7 +1593,7 @@ export default function App() {
       const socialRows = atendimentoRows.filter(row => areaIs(row, 'Acolhimento Social'));
       const pendingRows = atendimentoRows.filter(row => normalizeStr(row.status).includes('aguardando'));
       const extraRows = atendimentoRows.filter(row => row.extraAtendimento);
-      const partialTriagemRows = triagemRows.filter(row => (row.preenchimentoPct ?? triageCompletion(row).percent) < 80);
+      const partialTriagemRows = triagemRows.filter(row => (row.preenchimentoPct ? triageCompletion(row).percent : 0) < 80);
       const partialAtendimentoRows = atendimentoRows.filter(row => Number(row.preenchimentoPct || 0) > 0 && Number(row.preenchimentoPct || 0) < 80);
       const criticalTriagemRows = triagemRows.filter(row => triagePriority(row).level === 'critical');
       const priorityTriagemRows = triagemRows.filter(row => triagePriority(row).level === 'priority');
@@ -1300,7 +1624,9 @@ export default function App() {
         const priority = triagePriority(relatedTriagem);
         return {
           assistidoId: assistido.id,
-          nome: assistido.nome,
+          nome: assistidoDisplayName(assistido),
+          nomeCivil: assistido.nomeCivil || '',
+          nomeSocial: assistido.nomeSocial || '',
           chegada: assistido.chegadaAcaoData || assistido.dataCriacao,
           horaChegada: hourLabel(assistido.chegadaAcaoEm || assistido.dataCriacaoEm),
           prioridade: priority.label,
@@ -1605,7 +1931,7 @@ export default function App() {
           { label: 'Peso', value: 'peso', width: 10 },
           { label: 'Altura (cm)', value: 'altura', width: 12 },
           { label: 'Preenchimento', value: row => row.preenchimentoStatus || triageCompletion(row).status, width: 22 },
-          { label: '% preenchido', value: row => row.preenchimentoPct ?? triageCompletion(row).percent, width: 14 },
+          { label: '% preenchido', value: row => row.preenchimentoPct ? triageCompletion(row).percent : 0, width: 14 },
           { label: 'Encaminhamentos', value: 'encaminhamento', width: 36 },
           { label: 'Prioridade cuidado', value: 'prioridadeCuidado', width: 22 },
           { label: 'Atenções inclusivas', value: 'sinaisAtencao', width: 38 },
@@ -1769,10 +2095,16 @@ export default function App() {
     }
   };
 
+  const dashboardAssistidos = useMemo(() => assistidos.filter(row => !isTestAssistido(row)), [assistidos]);
+  const dashboardAssistidoIds = useMemo(() => new Set(dashboardAssistidos.map(row => String(row.id))), [dashboardAssistidos]);
+  const dashboardTriagens = useMemo(() => triagens.filter(row => dashboardAssistidoIds.has(String(row.assistidoId))), [triagens, dashboardAssistidoIds]);
+  const dashboardAnamneses = useMemo(() => anamneses.filter(row => dashboardAssistidoIds.has(String(row.assistidoId))), [anamneses, dashboardAssistidoIds]);
+  const dashboardAtendimentos = useMemo(() => atendimentos.filter(row => dashboardAssistidoIds.has(String(row.assistidoId))), [atendimentos, dashboardAssistidoIds]);
+
   // Lógica de Estatísticas Reais
   const getEstatisticasReais = () => {
     let counts = { med: {}, odonto: {}, psico: {}, fisio: {}, nutri: {} };
-    atendimentos.forEach(a => {
+    dashboardAtendimentos.forEach(a => {
       const diag = a.hd || a.diagnostico;
       if (diag && diag.trim() !== '') {
         const mainDiag = diag.split(/[,/]/)[0].trim();
@@ -1798,25 +2130,36 @@ export default function App() {
 
   const statsGeral = useMemo(() => {
     let masc = 0, fem = 0, outro = 0, semInfo = 0;
-    assistidos.forEach(a => {
+    dashboardAssistidos.forEach(a => {
       if(a.sexo === 'Masculino') masc++;
       else if(a.sexo === 'Feminino') fem++;
       else if (requiredText(a.sexo) && normalizeStr(a.sexo) !== 'nao informado') outro++;
       else semInfo++;
     });
-    return { total: assistidos.length, masc, fem, outro, semInfo, triagensHoje: triagens.filter(t => t.data === new Date().toLocaleDateString('pt-BR')).length };
-  }, [assistidos, triagens]);
+    const comDocumento = dashboardAssistidos.filter(a => requiredText(a.cpf) || requiredText(a.rg)).length;
+    return {
+      total: dashboardAssistidos.length,
+      masc,
+      fem,
+      outro,
+      semInfo,
+      comDocumento,
+      semDocumento: dashboardAssistidos.length - comDocumento,
+      triagensHoje: dashboardTriagens.filter(t => t.data === new Date().toLocaleDateString('pt-BR')).length,
+      triagensTotal: dashboardTriagens.length,
+    };
+  }, [dashboardAssistidos, dashboardTriagens]);
 
   const statsAtuacoes = useMemo(() => {
     const areas = {};
-    atendimentos.forEach(row => {
+    dashboardAtendimentos.forEach(row => {
       if (requiredText(row.area)) areas[row.area] = (areas[row.area] || 0) + 1;
     });
     return {
-      total: atendimentos.length,
+      total: dashboardAtendimentos.length,
       areas: Object.entries(areas).sort((a, b) => b[1] - a[1]),
     };
-  }, [atendimentos]);
+  }, [dashboardAtendimentos]);
 
   const statsClinica = useMemo(() => {
     const hoje = new Date().toLocaleDateString('pt-BR');
@@ -1825,7 +2168,7 @@ export default function App() {
       'Enfermagem / Curativos', 'Vacinação', 'Biomedicina', 'Farmácia', 'Podologia',
       'Exames Clínicos',
     ];
-    const registros = atendimentos.filter(row => areasSaude.some(area => normalizeStr(row.area) === normalizeStr(area)));
+    const registros = dashboardAtendimentos.filter(row => areasSaude.some(area => normalizeStr(row.area) === normalizeStr(area)));
     const areas = {};
     registros.forEach(row => { areas[row.area] = (areas[row.area] || 0) + 1; });
     return {
@@ -1835,15 +2178,15 @@ export default function App() {
       pendentes: registros.filter(row => normalizeStr(row.status).includes('aguardando')).length,
       areas: Object.entries(areas).sort((a, b) => b[1] - a[1]),
     };
-  }, [atendimentos]);
+  }, [dashboardAtendimentos]);
 
   const statsSocial = useMemo(() => {
     const hoje = new Date().toLocaleDateString('pt-BR');
     const moradia = {};
     const areas = {};
-    const registros = atendimentos.filter(row => ['Acolhimento Social', 'Apoio à Mulher', 'Emissão de Documentos']
+    const registros = dashboardAtendimentos.filter(row => ['Acolhimento Social', 'Apoio à Mulher', 'Emissão de Documentos']
       .some(area => normalizeStr(row.area) === normalizeStr(area)));
-    anamneses.forEach(row => {
+    dashboardAnamneses.forEach(row => {
       if (requiredText(row.moradia)) moradia[row.moradia] = (moradia[row.moradia] || 0) + 1;
     });
     registros.forEach(row => { areas[row.area] = (areas[row.area] || 0) + 1; });
@@ -1856,26 +2199,26 @@ export default function App() {
       return value && !['nenhuma vez', 'nao', 'nao informado', 'nao se aplica'].some(marker => value === marker);
     };
     return {
-      total: anamneses.length,
+      total: dashboardAnamneses.length,
       hoje: registros.filter(row => row.data === hoje).length,
       atendimentos: registros.length,
       moradia: Object.entries(moradia).sort((a, b) => b[1] - a[1]),
-      moradiaRua: anamneses.filter(row => {
+      moradiaRua: dashboardAnamneses.filter(row => {
         const value = normalizeStr(row.moradia);
         return value.includes('rua') || value.includes('descoberta');
       }).length,
-      alimentar: anamneses.filter(hasFoodRisk).length,
-      drogas: anamneses.filter(hasSubstanceUse).length,
-      saudeMental: anamneses.filter(row => normalizeStr(row.psiquiatria).includes('ideacao suicida')).length,
+      alimentar: dashboardAnamneses.filter(hasFoodRisk).length,
+      drogas: dashboardAnamneses.filter(hasSubstanceUse).length,
+      saudeMental: dashboardAnamneses.filter(row => normalizeStr(row.psiquiatria).includes('ideacao suicida')).length,
       areas: Object.entries(areas).sort((a, b) => b[1] - a[1]),
     };
-  }, [anamneses, atendimentos]);
+  }, [dashboardAnamneses, dashboardAtendimentos]);
 
   const statsVet = useMemo(() => {
     const hoje = new Date().toLocaleDateString('pt-BR');
     const sit = {}, diags = {};
     let totalPets = 0;
-    const registros = atendimentos.filter(a => normalizeStr(a.area) === normalizeStr('Veterinária') || normalizeStr(a.area) === normalizeStr('Medicina Veterinaria'));
+    const registros = dashboardAtendimentos.filter(a => normalizeStr(a.area) === normalizeStr('Veterinária') || normalizeStr(a.area) === normalizeStr('Medicina Veterinaria'));
     registros.forEach(a => {
       a.vetPets?.forEach(p => {
         if(p.nome) {
@@ -1892,12 +2235,12 @@ export default function App() {
       situacoes: Object.entries(sit).sort((a,b)=>b[1]-a[1]),
       doencas: Object.entries(diags).sort((a,b)=>b[1]-a[1]).slice(0,4),
     };
-  }, [atendimentos]);
+  }, [dashboardAtendimentos]);
 
   const statsDoacoes = useMemo(() => {
     const hoje = new Date().toLocaleDateString('pt-BR');
     const itens = {};
-    const registros = atendimentos.filter(row => normalizeStr(row.area) === normalizeStr('Doações') || normalizeStr(row.area) === normalizeStr('Doação'));
+    const registros = dashboardAtendimentos.filter(row => normalizeStr(row.area) === normalizeStr('Doações') || normalizeStr(row.area) === normalizeStr('Doação'));
     registros.forEach(row => {
       compactList(row.itens_entregues_cat).forEach(item => { itens[item] = (itens[item] || 0) + 1; });
     });
@@ -1909,12 +2252,12 @@ export default function App() {
       itensTotal: Object.values(itens).reduce((sum, value) => sum + value, 0),
       itens: Object.entries(itens).sort((a, b) => b[1] - a[1]).slice(0, 8),
     };
-  }, [atendimentos]);
+  }, [dashboardAtendimentos]);
 
   const statsJustica = useMemo(() => {
     const hoje = new Date().toLocaleDateString('pt-BR');
     const demandas = {};
-    const registros = atendimentos.filter(row => normalizeStr(row.area) === normalizeStr('Justiça de Rua'));
+    const registros = dashboardAtendimentos.filter(row => normalizeStr(row.area) === normalizeStr('Justiça de Rua'));
     registros.forEach(row => {
       compactList(row.categoria_juridica).forEach(item => { demandas[item] = (demandas[item] || 0) + 1; });
     });
@@ -1926,7 +2269,7 @@ export default function App() {
       categorias: Object.values(demandas).reduce((sum, value) => sum + value, 0),
       demandas: Object.entries(demandas).sort((a, b) => b[1] - a[1]).slice(0, 8),
     };
-  }, [atendimentos]);
+  }, [dashboardAtendimentos]);
 
   const recentAssistidos = useMemo(() => {
     const lastFlowByAssistido = new Map();
@@ -1951,6 +2294,19 @@ export default function App() {
     const hoje = new Date().toLocaleDateString('pt-BR');
     const id = String(assistido.id);
     const tri = triagens.find(t => String(t.assistidoId) === id && t.data === hoje);
+    const triagensDoAssistido = triagens
+      .filter(t => String(t.assistidoId) === id)
+      .sort((a, b) => recordTime(b) - recordTime(a));
+    const ultimoAtendimento = atendimentos
+      .filter(a => String(a.assistidoId) === id)
+      .sort((a, b) => recordTime(b) - recordTime(a))[0];
+    const ultimaTriagem = triagensDoAssistido[0];
+    const ultimoRegistroLabel = ultimoAtendimento
+      ? `${ultimoAtendimento.area || 'Atendimento'} em ${ultimoAtendimento.data || 'data não informada'}`
+      : ultimaTriagem
+        ? `Triagem em ${ultimaTriagem.data || 'data não informada'}`
+        : assistido.ultimoAtendimento || '';
+    const criadoHoje = assistido.dataCriacao === hoje || assistido.chegadaAcaoData === hoje;
     const ana = anamneses.find(a => String(a.assistidoId) === id);
     const atendimentosHoje = atendimentos.filter(a => String(a.assistidoId) === id && a.data === hoje);
     const triStatus = triageCompletion(tri);
@@ -1962,8 +2318,14 @@ export default function App() {
     const areasPendentes = areasRecomendadas.filter(area => !areasConcluidas.includes(area));
     const atendimentosParciais = atendimentosHoje.filter(a => Number(a.preenchimentoPct || 0) < 80);
 
-    if (!tri) {
-      return { tone: 'orange', label: 'Triagem pendente hoje', detail: 'Inicie sinais vitais e roteiro de áreas.' };
+    if (!tri && !atendimentosHoje.length) {
+      if (criadoHoje) {
+        return { tone: 'blue', label: 'Iniciar fluxo do plantão', detail: 'Sem atendimento registrado hoje. Abra a ficha para começar.' };
+      }
+      if (ultimoRegistroLabel) {
+        return { tone: 'gray', label: 'Pronto para novo atendimento', detail: `Último registro: ${ultimoRegistroLabel}. Abra a ficha se a pessoa retornou hoje.` };
+      }
+      return { tone: 'gray', label: 'Sem fluxo no plantão atual', detail: 'Abra a ficha para iniciar cadastro, triagem ou atendimento.' };
     }
     if (triStatus.percent < 80) {
       return { tone: 'amber', label: triStatus.status, detail: `${triStatus.percent}% preenchido. Completar sinais e encaminhamentos.` };
@@ -1994,7 +2356,8 @@ export default function App() {
     const latestTri = relatedTriagens[0];
     const priority = triagePriority(latestTri);
     const observationText = requiredText(latestTri?.observacaoAtencao || latestTri?.observacaoCrianca);
-    const observacao = ['sem observacao adicional', 'nao se aplica'].includes(normalizeStr(observationText)) ? '' : observationText;
+    const observacaoNormalizada = normalizeStr(observationText);
+    const observacao = ['sem observacao adicional', 'nao se aplica'].includes(observacaoNormalizada) || !hasSevereMarker(observationText) ? '' : observationText;
     const crianca = calculateAgeNum(assistido.dataNascimento) <= 12;
     if (!latestTri && !crianca) return null;
     if (priority.level === 'critical') {
@@ -2019,7 +2382,7 @@ export default function App() {
       const currentLocation = !assistido.localAcao || assistido.localAcao === selectedActionLocation;
       const query = normalizeStr(searchQuery);
       const matchesQuery = !query
-        || normalizeStr(assistido.nome).includes(query)
+        || assistidoSearchText(assistido).includes(query)
         || normalizeStr(assistido.cpf).includes(query)
         || normalizeStr(assistido.rg).includes(query);
       return activeToday && currentLocation && matchesQuery;
@@ -2060,6 +2423,7 @@ export default function App() {
   );
 
   if (!user || !userProfile) return (
+    <ActionLocationContext.Provider value={actionLocationContextValue}>
     <div className="min-h-[100dvh] w-full flex items-center justify-center p-4 overflow-y-auto" style={{ background: `linear-gradient(135deg, ${BRAND.navy} 0%, ${BRAND.navyDark} 65%, #17203f 100%)` }}>
       <div className="bg-white w-full max-w-sm rounded-[2rem] shadow-2xl p-8 my-auto border-t-[8px]" style={{ borderTopColor: BRAND.red }}>
         <div className="text-center mb-6">
@@ -2101,18 +2465,18 @@ export default function App() {
               try {
               const cred = await createUserWithEmailAndPassword(auth, fd.get('email'), fd.get('password'));
               signupAccountCreated = true;
+              const profilePhotoUrl = await uploadPhotoIfNeeded(fd.get('tempPhoto'), 'users', cred.user.uid).catch(() => '');
               await setDoc(doc(db, 'users', cred.user.uid), {
                 nome: requiredText(fd.get('nome')),
                 email: requiredText(fd.get('email')),
                 emailVerified: false,
                 role: fd.get('role'),
                 profissao: profissaoCadastro,
+                filial: requiredText(fd.get('filial')) || 'Santos',
                 projeto: inferredProjectForProfile(fd.get('role'), profissaoCadastro),
-                localAcao: fd.get('localAcao'),
-                cidadeAcao: ACTION_LOCATIONS.find(location => location.value === fd.get('localAcao'))?.city || '',
                 registro: requiredText(fd.get('registro')),
                 uid: cred.user.uid,
-                photo: fd.get('tempPhoto'),
+                photo: profilePhotoUrl,
                 lgpdAcceptedAt: new Date().toISOString(),
                 privacyNoticeVersion: 'mdm-lgpd-v1',
               });
@@ -2148,13 +2512,22 @@ export default function App() {
             <>
               <PhotoHandler onPhotoCaptured={(data) => { document.getElementById('tempPhoto').value = data; }} />
               <input type="hidden" name="tempPhoto" id="tempPhoto" />
-              <input name="nome" placeholder="Nome Completo" required className="w-full p-3 bg-gray-50 rounded-xl outline-none font-bold text-xs" />
-              <select name="role" required value={signupRole} onChange={(e) => setSignupRole(e.target.value)} className="w-full p-3 bg-gray-50 rounded-xl outline-none font-bold text-xs text-gray-600">
-                <option value="voluntario_eficiente">Voluntário(a) de apoio geral</option>
-                <option value="colaborador_servico">Colaborador(a) de serviço / apoio transversal</option>
-                <option value="academico">Acadêmico(a) / estudante da área</option>
-                <option value="profissional_formado">Profissional habilitado(a)</option>
-              </select>
+              <div className="mdm-auto-field" data-field-label="Nome completo">
+                <input name="nome" aria-label="Nome completo" placeholder="Ex.: Maria Santos" required className="w-full p-3 bg-gray-50 rounded-xl outline-none font-bold text-xs" />
+              </div>
+              <div className="mdm-auto-field" data-field-label="Perfil de acesso">
+                <select name="role" required value={signupRole} onChange={(e) => setSignupRole(e.target.value)} className="w-full p-3 bg-gray-50 rounded-xl outline-none font-bold text-xs text-gray-600">
+                  <option value="voluntario_eficiente">Voluntário(a) de apoio geral</option>
+                  <option value="colaborador_servico">Colaborador(a) de serviço / apoio transversal</option>
+                  <option value="academico">Acadêmico(a) / estudante da área</option>
+                  <option value="profissional_formado">Profissional habilitado(a)</option>
+                </select>
+              </div>
+              <div className="mdm-auto-field" data-field-label="Filial da equipe">
+                <select name="filial" required defaultValue="Santos" className="w-full p-3 bg-gray-50 rounded-xl outline-none font-bold text-xs text-gray-600">
+                  {filiaisEquipe.map(filial => <option key={filial} value={filial}>{filial}</option>)}
+                </select>
+              </div>
               {signupRole === 'voluntario_eficiente' || signupRole === 'colaborador_servico' ? (
                 <>
                   <input type="hidden" name="profissao" value={signupRole === 'voluntario_eficiente' ? 'apoio_operacional' : 'apoio_transversal'} />
@@ -2166,14 +2539,24 @@ export default function App() {
                   )}
                 </>
               ) : (
-                <div className="space-y-1 text-left">
-                  <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-400">Atuação principal na ação</label>
+                <div className="mdm-auto-field" data-field-label="Atuação principal na ação">
                   <select key={signupRole} name="profissao" required className="w-full p-3 bg-gray-50 rounded-xl outline-none font-bold text-xs text-gray-600">
                     {signupAreaOptions(signupRole).map(profissao => <option key={profissao} value={profissao}>{professionLabel(profissao)}</option>)}
                   </select>
                 </div>
               )}
-              <input name="registro" placeholder={signupRole === 'profissional_formado' || signupRole === 'academico' ? 'Conselho / matrícula / CPF' : 'CPF / identificação do colaborador'} required className="w-full p-3 bg-gray-50 rounded-xl outline-none font-bold text-xs" />
+              <div
+                className="mdm-auto-field"
+                data-field-label={signupRole === 'profissional_formado' || signupRole === 'academico' ? 'Conselho, matrícula ou CPF' : 'CPF ou documento de identificação'}
+              >
+                <input
+                  name="registro"
+                  aria-label={signupRole === 'profissional_formado' || signupRole === 'academico' ? 'Conselho, matrícula ou CPF' : 'CPF ou documento de identificação'}
+                  placeholder={signupRole === 'profissional_formado' || signupRole === 'academico' ? 'Ex.: CRM 000000, matrícula ou CPF' : 'Ex.: CPF, RG ou identificação institucional'}
+                  required
+                  className="w-full p-3 bg-gray-50 rounded-xl outline-none font-bold text-xs"
+                />
+              </div>
               <label className="flex items-start gap-2 rounded-xl border border-blue-100 bg-blue-50 p-3 text-left text-[8px] font-bold leading-relaxed text-blue-900">
                 <input type="checkbox" name="lgpd" required className="mt-0.5 h-3 w-3 rounded border-blue-300 text-blue-600" />
                 Declaro que acessarei apenas dados necessários ao atendimento, sem compartilhar planilhas, fotos ou informações sensíveis fora dos canais institucionais.
@@ -2185,16 +2568,8 @@ export default function App() {
               Informe o e-mail cadastrado. O link de recuperação será enviado pelo Firebase e a equipe não terá acesso à sua senha.
             </p>
           )}
-          {authMode !== 'reset' && (
-            <div className="space-y-1 text-left">
-              <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-400">Local da ação</label>
-              <select name="localAcao" required value={selectedActionLocation} onChange={(e) => setSelectedActionLocation(e.target.value)} className="w-full p-3 bg-gray-50 rounded-xl outline-none font-bold text-xs text-gray-600">
-                {ACTION_LOCATIONS.map(location => <option key={location.value} value={location.value}>{location.label} - {location.neighborhood}</option>)}
-              </select>
-            </div>
-          )}
-          <input name="email" type="email" placeholder="E-mail" required autoComplete="email" className="w-full p-3 bg-gray-50 rounded-xl outline-none font-bold text-xs" />
-          {authMode !== 'reset' && <input name="password" type="password" placeholder="Senha" required minLength={8} autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'} className="w-full p-3 bg-gray-50 rounded-xl outline-none font-bold text-xs" />}
+          <div className="mdm-auto-field" data-field-label="E-mail"><input name="email" type="email" aria-label="E-mail" placeholder="nome@email.com" required autoComplete="email" className="w-full p-3 bg-gray-50 rounded-xl outline-none font-bold text-xs" /></div>
+          {authMode !== 'reset' && <div className="mdm-auto-field" data-field-label="Senha"><input name="password" type="password" aria-label="Senha" placeholder="Mínimo de 8 caracteres" required minLength={8} autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'} className="w-full p-3 bg-gray-50 rounded-xl outline-none font-bold text-xs" /></div>}
           <button type="submit" className="w-full text-white font-black py-4 rounded-xl shadow-xl uppercase text-[9px] mt-2 border-b-4 active:scale-[0.99] transition-all" style={{ backgroundColor: BRAND.navy, borderBottomColor: BRAND.navyDark }}>
             {authMode === 'login' ? 'Entrar no Portal' : authMode === 'signup' ? 'Cadastrar Perfil' : 'Recuperar Senha'}
           </button>
@@ -2214,6 +2589,7 @@ export default function App() {
         </div>
       </div>
     </div>
+    </ActionLocationContext.Provider>
   );
 
   // --- VARS PARA FORMULÁRIOS DINÂMICOS ---
@@ -2229,40 +2605,85 @@ export default function App() {
   };
 
   return (
+    <ActionLocationContext.Provider value={actionLocationContextValue}>
     <div translate="no" className="bg-gray-100 h-[100dvh] w-full font-sans text-gray-800 flex justify-center overflow-hidden text-left">
       <div className="w-full max-w-md bg-white h-full shadow-2xl relative flex flex-col border-x border-gray-100">
         
         {/* NAVBAR */}
-        <header className="bg-white border-b px-4 py-2 flex justify-between items-center shrink-0 sticky top-0 z-50 shadow-sm">
-          <div className="flex items-center gap-4">
-            {currentView !== 'home' && <button onClick={handleBack} className="p-1.5 bg-gray-50 text-gray-500 rounded-lg shadow-sm"><ArrowLeft size={16} /></button>}
-            <div className="flex items-center gap-3">
-              <img src="/logo.png" alt="MDM" className="w-10 h-auto" onError={(e) => { e.target.style.display = 'none'; }} />
-              <div className="flex flex-col leading-tight">
-                <span className="text-[6px] font-black uppercase text-blue-600 tracking-widest">{roleLabel(userProfile.role)} • {professionLabel(profileProfession(userProfile))}</span>
-                <span className="text-[10px] font-bold text-gray-800 uppercase tracking-tight">{profileDisplayName(userProfile)}</span>
-              </div>
+        <header className="bg-white border-b px-3 py-2 flex justify-between items-center gap-2 shrink-0 sticky top-0 z-50 shadow-sm">
+          <div className="flex min-w-0 items-center gap-2">
+            {currentView !== 'home' && <button onClick={handleBack} aria-label="Voltar" className="shrink-0 p-2 bg-gray-50 text-gray-500 rounded-lg shadow-sm"><ArrowLeft size={16} /></button>}
+            <div className="flex min-w-0 items-center gap-2.5">
+              <img src="/logo.png" alt="MDM" className="w-14 h-auto shrink-0" onError={(e) => { e.target.style.display = 'none'; }} />
+              <span className="min-w-0 truncate text-[10px] font-black uppercase tracking-tight text-gray-900">{profileDisplayName(userProfile)}</span>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            {canViewUsers && (
-              <button
-                type="button"
-                title="Gestao de usuarios"
-                aria-label="Abrir gestao de usuarios"
-                onClick={() => { navigateFromBottom('usuarios'); loadManagedUsers(); }}
-                className={`rounded-lg p-1.5 transition-all active:scale-90 ${currentView === 'usuarios' ? 'bg-[#292f63] text-white' : 'text-gray-400 hover:text-[#292f63]'}`}
-              >
-                <UserCog size={15} />
-              </button>
-            )}
-            <button type="button" onClick={openOwnProfile} title="Meu perfil" aria-label="Editar meu perfil" className={`relative w-9 h-9 rounded-full border overflow-hidden shadow-sm active:scale-95 transition-all ${currentView === 'perfil' ? 'border-[#292f63] ring-2 ring-[#292f63]/15' : 'border-gray-200'}`}>
-               {userProfile.photo ? <img src={userProfile.photo} className="w-full h-full object-cover" alt="" /> : <div className="bg-gray-100 w-full h-full flex items-center justify-center text-xs font-bold">{profileDisplayName(userProfile)[0]}</div>}
-               <span className="absolute bottom-0 right-0 rounded-full bg-[#292f63] p-0.5 text-white"><Edit3 size={8} /></span>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              title="Alterar local da ação"
+              aria-label="Alterar local da ação"
+              onClick={() => {
+                setPendingActionLocation(selectedActionLocation || currentActionLocation.value);
+                setShowActionLocationModal(true);
+              }}
+              className="flex max-w-[104px] items-center gap-1 rounded-full border border-gray-100 bg-gray-50 px-2 py-1.5 text-[6px] font-black uppercase tracking-wider text-[#292f63] shadow-sm active:scale-95"
+            >
+              <MapPin size={11} />
+              <span className="truncate">{currentActionLocation.neighborhood || currentActionLocation.city}</span>
             </button>
-            <button onClick={() => signOut(auth)} className="text-red-400 p-1 active:scale-90 transition-all"><LogOut size={16}/></button>
+            <button type="button" onClick={() => setShowAppMenu(true)} title="Abrir menu do aplicativo" aria-label="Abrir menu do aplicativo" className="rounded-xl bg-[#292f63] p-2.5 text-white shadow-sm active:scale-95">
+              <Menu size={18} />
+            </button>
           </div>
         </header>
+
+        {showAppMenu && (
+          <div className="absolute inset-0 z-[210] bg-[#111a39]/45 backdrop-blur-sm" onClick={() => setShowAppMenu(false)}>
+            <aside className="ml-auto flex h-full w-[82%] max-w-xs flex-col bg-white p-5 shadow-2xl animate-fade-in" onClick={(event) => event.stopPropagation()}>
+              <div className="flex items-start justify-between gap-3 border-b border-gray-100 pb-4">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="h-11 w-11 shrink-0 overflow-hidden rounded-2xl border border-gray-100 bg-gray-50 shadow-sm">
+                    {userProfile.photo ? <img src={userProfile.photo} className="h-full w-full object-cover" alt="" /> : <div className="flex h-full w-full items-center justify-center text-sm font-black text-[#292f63]">{profileDisplayName(userProfile)[0]}</div>}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-black uppercase text-[#111a39]">{profileDisplayName(userProfile)}</p>
+                    <p className="mt-1 text-[8px] font-bold leading-snug text-gray-500">{roleLabel(userProfile.role)} • {professionLabel(profileProfession(userProfile))}</p>
+                  </div>
+                </div>
+                <button type="button" aria-label="Fechar menu" onClick={() => setShowAppMenu(false)} className="rounded-xl bg-gray-50 p-2 text-gray-500">
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="mt-4 space-y-2">
+                <button type="button" onClick={() => { setShowAppMenu(false); navigateFromBottom('home'); }} className="flex w-full items-center gap-3 rounded-2xl bg-gray-50 p-4 text-left text-[10px] font-black uppercase text-[#111a39]">
+                  <HomeIcon size={16} className="text-[#292f63]" /> Início
+                </button>
+                <button type="button" onClick={() => { setPendingActionLocation(selectedActionLocation || currentActionLocation.value); setShowActionLocationModal(true); setShowAppMenu(false); }} className="flex w-full items-center gap-3 rounded-2xl bg-gray-50 p-4 text-left text-[10px] font-black uppercase text-[#111a39]">
+                  <MapPin size={16} className="text-[#292f63]" /> Alterar local da ação
+                </button>
+                <button type="button" onClick={() => { setShowAppMenu(false); openOwnProfile(); }} className="flex w-full items-center gap-3 rounded-2xl bg-gray-50 p-4 text-left text-[10px] font-black uppercase text-[#111a39]">
+                  <User size={16} className="text-[#292f63]" /> Meu perfil
+                </button>
+                {canViewDashboard && (
+                  <button type="button" onClick={() => { setShowAppMenu(false); navigateFromBottom('stats'); }} className="flex w-full items-center gap-3 rounded-2xl bg-gray-50 p-4 text-left text-[10px] font-black uppercase text-[#111a39]">
+                    <PieChart size={16} className="text-[#292f63]" /> Dashboards
+                  </button>
+                )}
+                {canViewUsers && (
+                  <button type="button" onClick={() => { setShowAppMenu(false); navigateFromBottom('usuarios'); loadManagedUsers(); }} className="flex w-full items-center gap-3 rounded-2xl bg-gray-50 p-4 text-left text-[10px] font-black uppercase text-[#111a39]">
+                    <UserCog size={16} className="text-[#292f63]" /> Gestão de usuários
+                  </button>
+                )}
+              </div>
+
+              <button type="button" onClick={() => signOut(auth)} className="mt-auto flex w-full items-center justify-center gap-2 rounded-2xl border border-red-100 bg-red-50 p-4 text-[10px] font-black uppercase tracking-widest text-red-600">
+                <LogOut size={16} /> Sair com segurança
+              </button>
+            </aside>
+          </div>
+        )}
 
         {notification && (
           <div className="absolute top-16 left-1/2 -translate-x-1/2 z-[100] bg-gray-900/95 text-white px-5 py-2.5 rounded-full shadow-2xl flex items-center gap-2 animate-fade-in border border-white/10 min-w-[250px] justify-center text-center">
@@ -2270,6 +2691,55 @@ export default function App() {
               ? <AlertCircle size={14} className="text-amber-400" />
               : <CheckCircle size={14} className="text-emerald-400" />}
             <span className="text-[8px] font-black uppercase tracking-widest">{notification}</span>
+          </div>
+        )}
+
+        {(showActionLocationModal || !actionLocationConfirmedToday) && (
+          <div className="absolute inset-0 z-[220] flex items-center justify-center bg-[#111a39]/75 p-5 backdrop-blur-sm">
+            <div className="w-full max-w-sm rounded-[2rem] border border-white/20 bg-white p-6 shadow-2xl animate-scale-up">
+              <div className="flex items-start gap-3">
+                <div className="rounded-2xl bg-[#eef2fb] p-3 text-[#292f63]"><MapPin size={20} /></div>
+                <div>
+                  <p className="text-[7px] font-black uppercase tracking-[0.28em] text-gray-400">Check-in da ação</p>
+                  <h2 className="mt-1 text-lg font-black uppercase leading-tight text-[#111a39]">Qual a localidade da ação de hoje?</h2>
+                  <p className="mt-2 text-[9px] font-bold leading-relaxed text-gray-500">
+                    Prontuários, fila e dashboards serão vinculados somente ao local escolhido para o plantão de hoje.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-5 space-y-2">
+                {actionLocations.map(location => (
+                  <label key={location.value} className={`flex cursor-pointer items-center gap-3 rounded-2xl border p-3 transition-all ${pendingActionLocation === location.value ? 'border-[#292f63] bg-[#eef2fb]' : 'border-gray-100 bg-gray-50'}`}>
+                    <input
+                      type="radio"
+                      name="dailyActionLocation"
+                      value={location.value}
+                      checked={pendingActionLocation === location.value}
+                      onChange={(event) => setPendingActionLocation(event.target.value)}
+                      className="h-4 w-4 text-[#292f63]"
+                    />
+                    <span className="min-w-0">
+                      <span className="block truncate text-[10px] font-black uppercase text-[#111a39]">{location.label}</span>
+                      <span className="block truncate text-[8px] font-bold text-gray-500">{location.city} • {location.neighborhood} • {location.unit}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="mt-5 flex gap-3">
+                {actionLocationConfirmedToday && (
+                  <button type="button" onClick={() => setShowActionLocationModal(false)} className="flex-1 rounded-xl bg-gray-100 py-3 text-[8px] font-black uppercase tracking-widest text-gray-500 active:scale-95">
+                    Cancelar
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => changeActionLocation(pendingActionLocation || actionLocations[0]?.value, { confirm: true, forceReload: true })}
+                  className="flex-[2] rounded-xl border-b-4 border-[#1f244f] bg-[#292f63] py-3 text-[8px] font-black uppercase tracking-widest text-white shadow-lg active:scale-95"
+                >
+                  Confirmar local da ação
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -2296,22 +2766,19 @@ export default function App() {
                     showMsg('Informe seu nome completo para atualizar o perfil.');
                     return;
                   }
-                  const location = ACTION_LOCATIONS.find(item => item.value === fd.get('localAcao')) || currentActionLocation;
+                  const profilePhotoUrl = await uploadPhotoIfNeeded(profilePhotoDraft, 'users', user.uid);
                   const updates = {
                     nome,
                     nomeSocial: requiredText(fd.get('nomeSocial')),
                     telefone: requiredText(fd.get('telefone')),
                     registro: requiredText(fd.get('registro')),
-                    photo: profilePhotoDraft || '',
-                    localAcao: location.value,
-                    cidadeAcao: location.city,
+                    photo: profilePhotoUrl || '',
                     perfilAtualizadoEm: new Date().toISOString(),
                   };
                   const saved = await saveSafely(
                     async () => {
                       await setDoc(doc(db, 'users', user.uid), updates, { merge: true });
                       setUserProfile(previous => ({ ...previous, ...updates }));
-                      setSelectedActionLocation(location.value);
                     },
                     'Perfil atualizado com sucesso.'
                   );
@@ -2341,24 +2808,26 @@ export default function App() {
                 </div>
                 <div className="space-y-1">
                   <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-400">Nome social</label>
-                  <input name="nomeSocial" defaultValue={userProfile.nomeSocial || ''} maxLength={120} placeholder="Opcional" className="w-full rounded-xl bg-gray-50 p-3 text-xs font-bold outline-none" />
+                  <input name="nomeSocial" defaultValue={userProfile.nomeSocial || ''} maxLength={120} aria-label="Opcional" placeholder="" className="w-full rounded-xl bg-gray-50 p-3 text-xs font-bold outline-none" />
                 </div>
                 <div className="space-y-1">
                   <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-400">Telefone / WhatsApp</label>
                   <div className="flex items-center gap-2 rounded-xl bg-gray-50 px-3">
                     <Phone size={13} className="shrink-0 text-gray-400" />
-                    <input name="telefone" type="tel" defaultValue={userProfile.telefone || ''} maxLength={24} placeholder="Contato opcional" className="w-full bg-transparent py-3 text-xs font-bold outline-none" />
+                    <input name="telefone" type="tel" defaultValue={userProfile.telefone || ''} maxLength={24} aria-label="Contato opcional" placeholder="" className="w-full bg-transparent py-3 text-xs font-bold outline-none" />
                   </div>
                 </div>
                 <div className="space-y-1">
                   <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-400">Identificação / conselho</label>
-                  <input name="registro" defaultValue={userProfile.registro || ''} maxLength={60} placeholder="Se aplicável ao seu perfil" className="w-full rounded-xl bg-gray-50 p-3 text-xs font-bold outline-none" />
+                  <div className="mdm-auto-field" data-field-label="Se aplicável ao seu perfil"><input name="registro" defaultValue={userProfile.registro || ''} maxLength={60} aria-label="Se aplicável ao seu perfil" placeholder="" className="w-full rounded-xl bg-gray-50 p-3 text-xs font-bold outline-none" /></div>
                 </div>
+
                 <div className="space-y-1">
-                  <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-400">Local da ação</label>
-                  <select name="localAcao" defaultValue={userProfile.localAcao || selectedActionLocation} required className="w-full rounded-xl bg-gray-50 p-3 text-xs font-bold text-gray-600 outline-none">
-                    {ACTION_LOCATIONS.map(location => <option key={location.value} value={location.value}>{location.label} - {location.neighborhood}</option>)}
-                  </select>
+                  <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-400">Filial da equipe</label>
+                  <div className="rounded-xl border border-gray-100 bg-gray-50 p-3 text-xs font-black uppercase text-[#292f63]">
+                    {userProfile.filial || 'Santos'}
+                  </div>
+                  <p className="ml-2 text-[8px] font-bold leading-relaxed text-gray-400">A filial indica sua base de origem. O local da ação é escolhido no check-in diário.</p>
                 </div>
 
                 <div className="rounded-2xl border border-[#e7ebf5] bg-[#f7f9fd] p-4">
@@ -2443,24 +2912,26 @@ export default function App() {
                     <div key={a.id} onClick={() => { setSelectedAssistido(a); setCurrentView('ficha'); }} className={`flex items-center justify-between p-3.5 rounded-2xl cursor-pointer group border hover:border-blue-200 transition-all ${tone}`}>
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center text-white font-black text-xs shadow-md overflow-hidden">
-                          {a.photo ? <img src={a.photo} className="w-full h-full object-cover" /> : formatName(a.nome)[0]}
+                          {a.photo ? <img src={a.photo} className="w-full h-full object-cover" /> : formatName(assistidoDisplayName(a))[0]}
                         </div>
                         <div>
-                          <p className="text-[10px] font-black text-gray-900 tracking-tight leading-none uppercase">{a.nome}</p>
+                          <p className="text-[10px] font-black text-gray-900 tracking-tight leading-none uppercase">{assistidoDisplayName(a)}</p>
                           <p className="text-[7px] font-black uppercase tracking-widest mt-1.5">{flow.label}</p>
                           <p className="text-[7px] text-gray-500 font-bold mt-1 leading-snug max-w-[220px]">{flow.detail}</p>
                         </div>
                       </div>
                       <div className="flex flex-col items-end gap-2">
-                        <button type="button" aria-label={`Registrar atenção para ${a.nome}`} title={canPerformTriage ? 'Registrar atenção e comentário' : 'Alerta disponível para a equipe de triagem'} onClick={(event) => { event.stopPropagation(); openTriagem(a); }} className="rounded-lg p-1 active:scale-90">
-                          <AlertCircle size={17} className={attention ? (attention.level === 'critical' ? 'text-red-600 fill-red-100' : 'text-amber-500 fill-amber-100') : 'text-gray-300'} />
-                        </button>
+                        {attention && (
+                          <button type="button" aria-label={`Ver atenção de ${assistidoDisplayName(a)}`} title={attention.detail} onClick={(event) => { event.stopPropagation(); openTriagem(a); }} className="rounded-lg p-1 active:scale-90">
+                            <AlertCircle size={17} className={attention.level === 'critical' ? 'text-red-600 fill-red-100' : 'text-amber-500 fill-amber-100'} />
+                          </button>
+                        )}
                         <ChevronRight size={16} className="text-gray-300 group-hover:text-blue-500 transition-colors" />
                       </div>
                     </div>
                     );
                   })}
-                  {recentAssistidos.length === 0 && <p className="text-[9px] text-center text-gray-400 italic py-4">Nenhum registro ainda hoje.</p>}
+                  {recentAssistidos.length === 0 && <p className="text-[9px] text-center text-gray-400 italic py-4">Nenhum assistido recente nesta praça.</p>}
                 </div>
               </div>
             </div>
@@ -2475,7 +2946,7 @@ export default function App() {
                 </div>
               </div>
               <div className="p-4 space-y-3">
-                {assistidos.filter(a => normalizeStr(a.nome).includes(normalizeStr(searchQuery)) || (a.cpf && a.cpf.includes(searchQuery)) || (a.rg && normalizeStr(a.rg).includes(normalizeStr(searchQuery)))).map(a => {
+                {assistidos.filter(a => assistidoSearchText(a).includes(normalizeStr(searchQuery))).map(a => {
                   const flow = getAssistidoFlowSummary(a);
                   const attention = getAssistidoAttention(a);
                   const docs = [
@@ -2492,10 +2963,10 @@ export default function App() {
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex min-w-0 items-start gap-4 text-left">
                         <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center font-black text-base border-2 border-white shadow-inner overflow-hidden">
-                           {a.photo ? <img src={a.photo} className="w-full h-full object-cover" /> : formatName(a.nome)[0]}
+                           {a.photo ? <img src={a.photo} className="w-full h-full object-cover" /> : formatName(assistidoDisplayName(a))[0]}
                         </div>
                         <div className="min-w-0">
-                          <p className="font-black text-gray-900 text-xs tracking-tight uppercase">{a.nome}</p>
+                          <p className="font-black text-gray-900 text-xs tracking-tight uppercase">{assistidoDisplayName(a)}</p>
                           <p className="mt-2 flex items-center gap-1 text-[8px] font-black uppercase tracking-widest text-gray-400"><IdCard size={10}/> {docs}</p>
                           <p className="mt-1 text-[8px] font-bold leading-snug text-gray-500">{identity}</p>
                           <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2">
@@ -2505,9 +2976,11 @@ export default function App() {
                         </div>
                       </div>
                       <div className="flex flex-col items-end gap-2">
-                        <button type="button" aria-label={`Registrar atenção para ${a.nome}`} title={canPerformTriage ? 'Registrar atenção e comentário' : 'Alerta disponível para a equipe de triagem'} onClick={(event) => { event.stopPropagation(); openTriagem(a); }} className="rounded-lg p-1 active:scale-90">
-                          <AlertCircle size={18} className={attention ? (attention.level === 'critical' ? 'text-red-600 fill-red-100' : 'text-amber-500 fill-amber-100') : 'text-gray-300'} />
-                        </button>
+                        {attention && (
+                          <button type="button" aria-label={`Ver atenção de ${assistidoDisplayName(a)}`} title={attention.detail} onClick={(event) => { event.stopPropagation(); openTriagem(a); }} className="rounded-lg p-1 active:scale-90">
+                            <AlertCircle size={18} className={attention.level === 'critical' ? 'text-red-600 fill-red-100' : 'text-amber-500 fill-amber-100'} />
+                          </button>
+                        )}
                         <ChevronRight size={20} className="text-gray-200" />
                       </div>
                     </div>
@@ -2579,12 +3052,12 @@ export default function App() {
                     <div key={assistido.id} className={`rounded-[1.5rem] border p-4 shadow-sm ${emphasis}`}>
                       <div className="flex items-start gap-3">
                         <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-[#292f63] text-sm font-black text-white">
-                          {assistido.photo ? <img src={assistido.photo} className="h-full w-full object-cover" /> : formatName(assistido.nome)[0]}
+                          {assistido.photo ? <img src={assistido.photo} className="h-full w-full object-cover" /> : formatName(assistidoDisplayName(assistido))[0]}
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-start justify-between gap-2">
                             <div>
-                              <p className="truncate text-[11px] font-black uppercase text-gray-950">{assistido.nome}</p>
+                              <p className="truncate text-[11px] font-black uppercase text-gray-950">{assistidoDisplayName(assistido)}</p>
                               <p className="mt-1 text-[7px] font-black uppercase tracking-widest text-gray-400">Chegada #{String(arrivalOrder).padStart(2, '0')} • {hourLabel(arrivalAt)}</p>
                             </div>
                             <span className={`shrink-0 rounded-lg px-2 py-1 text-[6px] font-black uppercase tracking-wider ${item.rank === 0 ? 'bg-red-600 text-white' : priority.level === 'priority' ? 'bg-amber-500 text-white' : 'bg-gray-100 text-gray-500'}`}>
@@ -2652,30 +3125,41 @@ export default function App() {
                       e.preventDefault();
                       const fd = new FormData(e.target);
                       const id = selectedAssistido?.id || Date.now().toString();
-                      const nome = requiredText(fd.get('nome'));
+                      const nomeCivil = requiredText(fd.get('nome'));
+                      const nomeSocial = requiredText(fd.get('nomeSocial'));
+                      const nome = nomeSocial || nomeCivil;
                       const cpf = requiredText(fd.get('cpf'));
                       const dataNascimento = fd.get('nasc');
+                      if (!nomeCivil && !nomeSocial) {
+                        showMsg('Informe o nome civil ou o nome social do assistido.');
+                        return;
+                      }
                       if (new Date(dataNascimento) > new Date()) {
                         showMsg('A data de nascimento nao pode estar no futuro.');
                         return;
                       }
-                      if (cpf && assistidos.some(a => a.id !== id && requiredText(a.cpf) === cpf)) {
+                      if (cpf && normalizeStr(cpf) !== 'nao informado' && assistidos.some(a => a.id !== id && requiredText(a.cpf) === cpf)) {
                         showMsg('Ja existe um assistido com esse CPF.');
                         return;
                       }
+                      const photoUrl = await uploadPhotoIfNeeded(fd.get('photoData'), 'assistidos', id);
                       const novo = applyFieldDefaults({ 
                         id, 
-                        nome, 
+                        nome,
+                        nomeCivil,
+                        nomeSocial,
                         cpf, 
                         rg: requiredText(fd.get('rg')), 
                         dataNascimento, 
-                        sexo: fd.get('sexo'), 
+                        sexo: fd.get('genero'),
+                        genero: fd.get('genero'),
+                        sexoNascimento: fd.get('sexoNascimento'),
                         raca: fd.get('raca'),
                         naturalidade: fd.get('naturalidade'),
                         procedencia: fd.get('procedencia'),
                         escolaridade: fd.get('escolaridade'),
                         estadoCivil: fd.get('estadoCivil'),
-                        photo: fd.get('photoData') || '', 
+                        photo: photoUrl || '',
                         criadoPor: userProfile.nome, 
                         localAcao: currentActionLocation.value,
                         unidadeAcao: currentActionLocation.label,
@@ -2685,7 +3169,11 @@ export default function App() {
                         chegadaAcaoEm: selectedAssistido?.chegadaAcaoEm || Date.now(),
                       }, {
                         cpf: 'Não informado',
+                        nomeCivil: '',
+                        nomeSocial: '',
                         rg: 'Não informado',
+                        genero: 'Não informado',
+                        sexoNascimento: 'Não informado',
                         raca: 'Não informado',
                         naturalidade: 'Não informado',
                         procedencia: 'Não informado',
@@ -2694,7 +3182,11 @@ export default function App() {
                         photo: '',
                       });
                       const saved = await saveSafely(
-                        () => setDoc(doc(db, 'assistidos', id), novo, { merge: true }),
+                        async () => {
+                          await setDoc(doc(db, 'assistidos', id), novo, { merge: true });
+                          syncLocalRecord(setAssistidos, novo);
+                          setSelectedAssistido(novo);
+                        },
                         'Identificacao salva.'
                       );
                       if (saved) goToFicha(novo);
@@ -2704,8 +3196,12 @@ export default function App() {
                       <input type="hidden" name="photoData" id="photoData" defaultValue={selectedAssistido?.photo || ''} />
 
                       <div className="space-y-1.5">
-                         <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Nome Civil Completo</label>
-                         <input name="nome" required defaultValue={selectedAssistido?.nome || ''} className="w-full p-4 bg-gray-50 rounded-2xl border-none outline-none font-bold text-sm shadow-inner uppercase" />
+                         <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Nome civil completo</label>
+                         <div className="mdm-auto-field" data-field-label="Obrigatório se não houver nome social"><input name="nome" defaultValue={selectedAssistido?.nomeCivil || (selectedAssistido?.nome !== selectedAssistido?.nomeSocial ? selectedAssistido?.nome : '') || ''} aria-label="Obrigatório se não houver nome social" placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none outline-none font-bold text-sm shadow-inner uppercase" /></div>
+                      </div>
+                      <div className="space-y-1.5">
+                         <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Nome Social</label>
+                         <div className="mdm-auto-field" data-field-label="Obrigatório se não houver nome civil"><input name="nomeSocial" defaultValue={selectedAssistido?.nomeSocial || ''} aria-label="Obrigatório se não houver nome civil" placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none outline-none font-bold text-sm shadow-inner uppercase" /></div>
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                          <div className="space-y-1.5">
@@ -2723,13 +3219,28 @@ export default function App() {
                             <input name="nasc" type="date" required defaultValue={selectedAssistido?.dataNascimento || ''} className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-sm shadow-inner" />
                          </div>
                          <div className="space-y-1.5">
-                            <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Gênero</label>
-                            <select name="sexo" required defaultValue={selectedAssistido?.sexo || 'Masculino'} className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-sm bg-white shadow-inner text-center">
-                               <option value="Masculino">Masculino</option>
-                               <option value="Feminino">Feminino</option>
+                            <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Gênero informado</label>
+                            <select name="genero" required defaultValue={selectedAssistido?.genero || selectedAssistido?.sexo || 'Não informado'} className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-sm bg-white shadow-inner text-center">
+                               <option value="Não informado">Não informado</option>
+                               <option value="Homem">Homem</option>
+                               <option value="Mulher">Mulher</option>
+                               <option value="Homem trans">Homem trans</option>
+                               <option value="Mulher trans">Mulher trans</option>
+                               <option value="Travesti">Travesti</option>
+                               <option value="Não binário">Não binário</option>
                                <option value="Outro">Outro</option>
+                               <option value="Prefere não responder">Prefere não responder</option>
                             </select>
                          </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                         <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Sexo ao nascer</label>
+                          <select name="sexoNascimento" required defaultValue={['Masculino', 'Feminino'].includes(selectedAssistido?.sexoNascimento) ? selectedAssistido.sexoNascimento : ''} className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-sm bg-white shadow-inner text-center">
+                            <option value="" disabled>Selecione...</option>
+                            <option value="Masculino">Masculino</option>
+                            <option value="Feminino">Feminino</option>
+                          </select>
                       </div>
 
                       <div className="grid grid-cols-2 gap-3 pt-3 border-t border-gray-100">
@@ -2747,13 +3258,13 @@ export default function App() {
                          </div>
                          <div className="space-y-1.5">
                             <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Naturalidade</label>
-                            <input name="naturalidade" defaultValue={selectedAssistido?.naturalidade || ''} placeholder="Onde nasceu?" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-xs shadow-inner" />
+                            <div className="mdm-auto-field" data-field-label="Onde nasceu"><input name="naturalidade" defaultValue={selectedAssistido?.naturalidade || ''} aria-label="Onde nasceu?" placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-xs shadow-inner" /></div>
                          </div>
                       </div>
 
                       <div className="space-y-1.5">
                          <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Procedência</label>
-                         <input name="procedencia" defaultValue={selectedAssistido?.procedencia || ''} placeholder="De onde veio / Veio de qual cidade?" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-xs shadow-inner" />
+                         <div className="mdm-auto-field" data-field-label="De onde veio / Veio de qual cidade"><input name="procedencia" defaultValue={selectedAssistido?.procedencia || ''} aria-label="De onde veio / Veio de qual cidade?" placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-xs shadow-inner" /></div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-3">
@@ -2774,6 +3285,8 @@ export default function App() {
                                <option value="Solteiro(a)">Solteiro(a)</option>
                                <option value="Casado(a)">Casado(a)</option>
                                <option value="União estável">União estável</option>
+                               <option value="Divorciado(a)">Divorciado(a)</option>
+                               <option value="Viúvo(a)">Viúvo(a)</option>
                                <option value="Não se aplica">Não se aplica</option>
                             </select>
                          </div>
@@ -2805,7 +3318,7 @@ export default function App() {
             const atendimentosParciaisFicha = atendimentosHojeFicha.filter(a => Number(a.preenchimentoPct || 0) < 80);
             const patientAttention = getAssistidoAttention(selectedAssistido);
             const attentionItems = [
-              !tri && 'Triagem de hoje ainda não foi iniciada.',
+              !tri && 'Fluxo do plantão atual ainda não foi iniciado.',
               tri && triStatus.percent < 80 && `Triagem parcial: ${triStatus.status.toLowerCase()} (${triStatus.percent}%).`,
               !ana && 'Censo social e histórico ainda não foram preenchidos.',
               ana && anaStatus.percent < 80 && `Censo social parcial (${anaStatus.percent}%). Revise dados sociais e clínicos.`,
@@ -2813,19 +3326,26 @@ export default function App() {
               areasPendentesFicha.length > 0 && `Atendimentos recomendados pendentes: ${areasPendentesFicha.slice(0, 4).join(', ')}.`,
               patientAttention && `${patientAttention.label}: ${patientAttention.detail}`,
             ].filter(Boolean);
+            const attentionCritical = patientAttention?.level === 'critical' || attentionItems.some(item => hasSevereMarker(item));
             
             return (
               <div className="p-4 space-y-4 animate-fade-in h-full overflow-y-auto">
+                <PatientHeader assistido={selectedAssistido} triagem={tri} censo={ana} />
                 <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-100 flex flex-col items-center text-center relative overflow-hidden">
                   <div className="absolute top-0 left-0 w-full h-1.5 bg-blue-600"></div>
                   <button onClick={() => setCurrentView('cadastro')} className="absolute top-4 right-4 p-2.5 bg-gray-50 text-blue-600 rounded-full border border-blue-50 shadow-sm active:scale-90 transition-all"><Edit3 size={16}/></button>
+                  {canDeleteAssistido && (
+                    <button onClick={() => handleDeleteAssistido(selectedAssistido)} title="Inativar cadastro" className="absolute top-4 left-4 p-2.5 bg-red-50 text-red-600 rounded-full border border-red-100 shadow-sm active:scale-90 transition-all">
+                      <Trash2 size={16}/>
+                    </button>
+                  )}
                   <div className="w-24 h-24 bg-blue-600 text-white rounded-[2rem] flex items-center justify-center text-4xl font-black shadow-lg mb-4 border-4 border-white rotate-3 overflow-hidden">
-                    {selectedAssistido.photo ? <img src={selectedAssistido.photo} className="w-full h-full object-cover" /> : formatName(selectedAssistido.nome)[0]}
+                    {selectedAssistido.photo ? <img src={selectedAssistido.photo} className="w-full h-full object-cover" /> : formatName(assistidoDisplayName(selectedAssistido))[0]}
                   </div>
-                  <h2 className="text-base font-black text-gray-900 tracking-tighter leading-tight uppercase px-4">{selectedAssistido.nome}</h2>
+                  <h2 className="text-base font-black text-gray-900 tracking-tighter leading-tight uppercase px-4">{assistidoDisplayName(selectedAssistido)}</h2>
                   <div className="flex justify-center gap-2 mt-3 text-[7px] font-black text-gray-400 uppercase tracking-widest">
-                    <span className="bg-gray-100 px-3 py-1 rounded-full shadow-inner">{calculateAge(selectedAssistido.dataNascimento)} • {selectedAssistido.sexo || 'N/A'}</span>
-                    <span className="bg-gray-100 px-3 py-1 rounded-full shadow-inner">CPF: {selectedAssistido.cpf || 'N/A'}</span>
+                    <span className="bg-gray-100 px-3 py-1 rounded-full shadow-inner">{calculateAge(selectedAssistido.dataNascimento)} • {selectedAssistido.sexo || 'Não informado'}</span>
+                    <span className="bg-gray-100 px-3 py-1 rounded-full shadow-inner">CPF: {selectedAssistido.cpf || 'Não informado'}</span>
                   </div>
                   
                   <button onClick={() => setCurrentView('historico')} className="mt-5 flex items-center gap-2 bg-blue-50 text-blue-600 border border-blue-100 px-5 py-2.5 rounded-2xl font-black text-[9px] uppercase tracking-widest shadow-sm active:scale-95 transition-all hover:bg-blue-600 hover:text-white group mx-auto">
@@ -2834,16 +3354,16 @@ export default function App() {
                 </div>
 
                 {attentionItems.length > 0 && (
-                  <div className="rounded-[1.8rem] border-2 border-amber-300 bg-amber-50 p-4 shadow-lg ring-4 ring-amber-100">
+                  <div className={`rounded-[1.8rem] border-2 p-4 shadow-lg ring-4 ${attentionCritical ? 'border-red-300 bg-red-50 ring-red-100' : 'border-amber-300 bg-amber-50 ring-amber-100'}`}>
                     <div className="flex items-start gap-3">
-                      <div className="rounded-2xl bg-amber-500 p-2.5 text-white shadow-md">
+                      <div className={`rounded-2xl p-2.5 text-white shadow-md ${attentionCritical ? 'bg-red-600' : 'bg-amber-500'}`}>
                         <AlertCircle size={18} />
                       </div>
                       <div className="flex-1">
-                        <p className="text-[10px] font-black uppercase tracking-widest text-amber-900">Atenção no atendimento</p>
+                        <p className={`text-[10px] font-black uppercase tracking-widest ${attentionCritical ? 'text-red-900' : 'text-amber-900'}`}>Atenção no atendimento</p>
                         <div className="mt-2 space-y-1.5">
                           {attentionItems.map(item => (
-                            <p key={item} className="text-[8px] font-bold leading-snug text-amber-950">• {item}</p>
+                            <p key={item} className={`text-[8px] font-bold leading-snug ${attentionCritical ? 'text-red-950' : 'text-amber-950'}`}>• {item}</p>
                           ))}
                         </div>
                         <div className="mt-3 flex gap-2">
@@ -2872,7 +3392,7 @@ export default function App() {
                       <div className={`p-2.5 rounded-xl ${!tri ? 'bg-orange-100 text-orange-600' : triIncomplete ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-600'}`}><HeartPulse size={16}/></div>
                       <div className="leading-none">
                         <p className={`text-[10px] font-black tracking-tighter ${!tri ? 'text-orange-900' : triIncomplete ? 'text-amber-900' : 'text-emerald-900'}`}>1. Triagem / Check-up</p>
-                        <p className={`text-[6px] uppercase font-black mt-1.5 ${triIncomplete ? 'text-amber-700' : 'text-emerald-600'}`}>{tri ? `${triStatus.status} • ${triStatus.percent}% preenchido` : 'Requer triagem hoje'}</p>
+                        <p className={`text-[6px] uppercase font-black mt-1.5 ${triIncomplete ? 'text-amber-700' : 'text-emerald-600'}`}>{tri ? `${triStatus.status} • ${triStatus.percent}% preenchido` : 'Iniciar fluxo do plantão'}</p>
                       </div>
                     </div>
                     <button onClick={() => openTriagem(selectedAssistido)} className={`text-[7px] font-black uppercase tracking-widest px-4 py-2 rounded-lg shadow-sm active:scale-95 transition-all ${!canPerformTriage ? 'bg-gray-100 text-gray-400' : !tri ? 'bg-orange-500 text-white shadow-lg' : triIncomplete ? 'bg-amber-600 text-white shadow-lg' : 'bg-emerald-200 text-emerald-800'}`}>
@@ -2906,6 +3426,7 @@ export default function App() {
                     const renderAreaCard = (area, extra = false) => {
                       const atd = atendimentosHoje.find(a => a.area === area);
                       const canOpenArea = canAccessArea(area);
+                      const canWriteCurrentArea = canWriteArea(area);
                       const isAllowed = canFinalizeArea(area);
                       const isRecomendado = areasRecomendadas.includes(area);
                       const isExtra = extra || Boolean(atd?.extraAtendimento);
@@ -2933,8 +3454,8 @@ export default function App() {
                                </p>
                              </div>
                           </div>
-                          <button disabled={!canOpenArea} onClick={() => openAtendimento(area, atd || null, { extra: isExtra || !isRecomendado })} className={`text-[7px] font-black uppercase tracking-widest px-4 py-2 rounded-xl shadow-md transition-all active:scale-95 disabled:cursor-not-allowed ${!canOpenArea ? 'bg-gray-100 text-gray-400 shadow-none' : atd?.status === 'Concluído' ? 'bg-emerald-100 text-emerald-700' : atd?.status === 'Aguardando Profissional' ? (isAllowed ? 'bg-blue-600 text-white animate-pulse' : 'bg-orange-100 text-orange-600') : isExtra || !isRecomendado ? 'bg-gray-900 text-white' : 'bg-blue-50 text-blue-600 border border-blue-100'}`}>
-                            {!canOpenArea ? 'Outra Equipe' : atd?.status === 'Concluído' ? 'Ver' : atd?.status === 'Aguardando Profissional' ? (isAllowed ? 'Validar' : 'Na Fila') : isExtra || !isRecomendado ? 'Atendimento Extra' : 'Atender'}
+                          <button disabled={!canOpenArea} onClick={() => openAtendimento(area, atd || null, { extra: isExtra || !isRecomendado })} className={`text-[7px] font-black uppercase tracking-widest px-4 py-2 rounded-xl shadow-md transition-all active:scale-95 disabled:cursor-not-allowed ${!canOpenArea ? 'bg-gray-100 text-gray-400 shadow-none' : !canWriteCurrentArea ? 'bg-amber-50 text-amber-700 border border-amber-100' : atd?.status === 'Concluído' ? 'bg-emerald-100 text-emerald-700' : atd?.status === 'Aguardando Profissional' ? (isAllowed ? 'bg-blue-600 text-white animate-pulse' : 'bg-orange-100 text-orange-600') : isExtra || !isRecomendado ? 'bg-gray-900 text-white' : 'bg-blue-50 text-blue-600 border border-blue-100'}`}>
+                            {!canOpenArea ? 'Outra Equipe' : !canWriteCurrentArea ? 'Ver/Comentar' : atd?.status === 'Concluído' ? 'Ver' : atd?.status === 'Aguardando Profissional' ? (isAllowed ? 'Validar' : 'Na Fila') : isExtra || !isRecomendado ? 'Atendimento Extra' : 'Atender'}
                           </button>
                         </div>
                       );
@@ -2974,7 +3495,15 @@ export default function App() {
 
           {/* NOVA ABA: HISTÓRICO COMPLETO POR ÁREA */}
           {currentView === 'historico' && selectedAssistido && (() => {
-             const hist = atendimentos.filter(a => String(a.assistidoId) === String(selectedAssistido.id)).sort((a,b) => Number(b.id) - Number(a.id));
+             const histFilter = formToggles.historyAreaFilter || 'Todas';
+             const hist = atendimentos
+               .filter(a => String(a.assistidoId) === String(selectedAssistido.id))
+               .filter(a => histFilter === 'Todas' || a.area === histFilter)
+               .sort((a,b) => recordTime(b) - recordTime(a));
+             const histAreas = ['Todas', ...new Set(atendimentos
+               .filter(a => String(a.assistidoId) === String(selectedAssistido.id))
+               .map(a => a.area)
+               .filter(Boolean))];
              
              // Agrupar atendimentos por área
              const groupedHist = hist.reduce((acc, curr) => {
@@ -2985,6 +3514,7 @@ export default function App() {
 
              return (
                <div className="p-4 animate-fade-in pb-32 text-left">
+                  <PatientHeader assistido={selectedAssistido} triagem={triagens.find(t => String(t.assistidoId) === String(selectedAssistido.id))} censo={anamneses.find(a => String(a.assistidoId) === String(selectedAssistido.id))} />
                   <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-100">
                      <div className="flex justify-between items-center mb-6 border-b pb-4">
                         <div className="flex items-center gap-3">
@@ -2995,8 +3525,15 @@ export default function App() {
                      </div>
 
                      <div className="mb-6">
-                        <h4 className="text-[11px] font-black text-gray-800 uppercase px-1">{selectedAssistido.nome}</h4>
-                        <p className="text-[8px] font-bold text-gray-400 uppercase px-1 mt-1">Nascimento: {selectedAssistido.dataNascimento ? new Date(selectedAssistido.dataNascimento).toLocaleDateString('pt-BR') : 'N/A'}</p>
+                        <h4 className="text-[11px] font-black text-gray-800 uppercase px-1">{assistidoDisplayName(selectedAssistido)}</h4>
+                         <p className="text-[8px] font-bold text-gray-400 uppercase px-1 mt-1">Nascimento: {selectedAssistido.dataNascimento ? new Date(selectedAssistido.dataNascimento).toLocaleDateString('pt-BR') : 'Não informado'}</p>
+                     </div>
+                     <div className="mb-5 flex gap-2 overflow-x-auto pb-1">
+                       {histAreas.map(area => (
+                         <button key={area} type="button" onClick={() => setFormToggles(prev => ({ ...prev, historyAreaFilter: area }))} className={`shrink-0 rounded-full px-3 py-2 text-[7px] font-black uppercase tracking-wider ${histFilter === area ? 'bg-[#292f63] text-white' : 'bg-gray-50 text-gray-500'}`}>
+                           {area}
+                         </button>
+                       ))}
                      </div>
 
                      {Object.keys(groupedHist).length === 0 ? (
@@ -3017,7 +3554,7 @@ export default function App() {
                                           
                                           <div className="flex justify-between items-center mb-3">
                                              <span className="text-[10px] font-black text-gray-800 uppercase tracking-tight flex items-center gap-1.5">
-                                                <Calendar size={12} className="text-blue-500"/> {atd.data}
+                                                <Calendar size={12} className="text-blue-500"/> {formatClinicalDate(atd.dataCriacaoEm || atd.criadoEm || atd.registradoEm || atd.id || atd.data)}
                                              </span>
                                              <span className={`text-[7px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full ${atd.status === 'Concluído' ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>
                                                 {atd.status}
@@ -3026,9 +3563,12 @@ export default function App() {
                                           
                                           <div className="space-y-2 text-[9px] text-gray-600 leading-relaxed">
                                              {atd.nomeProfissional && <p><span className="font-black text-gray-500 uppercase">Profissional:</span> {atd.nomeProfissional}</p>}
-                                             {(atd.hd || atd.diagnostico) && <p><span className="font-black text-blue-500 uppercase">HD:</span> {atd.hd || atd.diagnostico}</p>}
-                                             {atd.subjetivo && <p className="line-clamp-2"><span className="font-black text-gray-500 uppercase">Evolução:</span> {atd.subjetivo}</p>}
-                                             {atd.plano && <p className="line-clamp-2"><span className="font-black text-emerald-600 uppercase">Conduta:</span> {atd.plano}</p>}
+                                             <div className="grid gap-2">
+                                               <div className="rounded-xl bg-white p-3"><span className="font-black text-gray-500 uppercase">S - Subjetivo:</span> {atd.qd || atd.subjetivo || atd.demandaJuridica || atd.itensSolicitados || 'Não informado'}</div>
+                                               <div className="rounded-xl bg-white p-3"><span className="font-black text-cyan-600 uppercase">O - Objetivo:</span> {atd.objetivo || atd.evolucaoEnfermagem || atd.testes_rapidos || atd.vacinasAplicadas || 'Não informado'}</div>
+                                               <div className="rounded-xl bg-white p-3"><span className="font-black text-blue-600 uppercase">A - Avaliação:</span> {atd.hd || atd.diagnostico || atd.estado_nutricional || atd.categoria_juridica || 'Não informado'}</div>
+                                               <div className="rounded-xl bg-white p-3"><span className="font-black text-emerald-600 uppercase">P - Conduta:</span> {atd.plano || atd.acaoJuridica || atd.encaminhamentoSocial || atd.itensEntregues || 'Não informado'}</div>
+                                             </div>
                                              {atd.demandaJuridica && <p className="line-clamp-2"><span className="font-black text-gray-500 uppercase">Demanda:</span> {atd.demandaJuridica}</p>}
                                              {atd.itens_entregues_cat && <p className="line-clamp-2"><span className="font-black text-orange-500 uppercase">Doado:</span> {atd.itens_entregues_cat}</p>}
                                              {(area === 'Veterinária' || area === 'Medicina Veterinaria') && atd.vetPets && <p><span className="font-black text-rose-500 uppercase">Pets Atendidos:</span> {atd.vetPets.map(p => p.nome).join(', ')}</p>}
@@ -3058,6 +3598,7 @@ export default function App() {
           {/* FORMULÁRIO DE ANAMNESE SOCIAL MASSIVA */}
           {currentView === 'anamnese' && selectedAssistido && (
              <div className="p-4 animate-fade-in pb-32">
+                <PatientHeader assistido={selectedAssistido} triagem={triagens.find(t => String(t.assistidoId) === String(selectedAssistido.id))} censo={anamneses.find(a => String(a.assistidoId) === String(selectedAssistido.id))} />
                 <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-100">
                    <div className="flex justify-between items-center mb-6 border-b pb-4 text-left">
                       <div className="flex items-center gap-3">
@@ -3069,14 +3610,26 @@ export default function App() {
                    <form onSubmit={async (e) => {
                       e.preventDefault();
                       const fd = new FormData(e.target);
-                      const id = anamneses.find(a => a.assistidoId === selectedAssistido.id)?.id || Date.now().toString();
+                      const censoAtual = anamneses.find(a => String(a.assistidoId) === String(selectedAssistido.id));
+                      const id = censoAtual?.id || Date.now().toString();
                       const d = Object.fromEntries(fd);
                       
                       d.programas = fd.getAll('programas').join(', ');
                       d.comorbidades = exclusiveList(fd.getAll('comorbidades'), 'Não há antecedentes');
                       d.psiquiatria = exclusiveList(fd.getAll('psiquiatria'), 'Ausência de diagnóstico');
-                      d.drogas = exclusiveList(fd.getAll('drogas'), 'Não faz uso de substância');
+                      d.drogas = exclusiveList(fd.getAll('drogas'), 'Não faz uso declarado');
+                      if (normalizeStr(d.drogas).includes('nao faz uso')) {
+                        d.detalhesDrogas = '';
+                        d.tabacoQuantidade = '';
+                        d.alcoolQuantidade = '';
+                        d.outrasSubstanciasDetalhes = '';
+                      }
                       d.sintomas_ginec = exclusiveList(fd.getAll('sintomas_ginec'), 'Ausência de sintoma');
+                      d.detalhesDrogas = [
+                        requiredText(d.tabacoQuantidade) && `Tabaco: ${requiredText(d.tabacoQuantidade)}`,
+                        requiredText(d.alcoolQuantidade) && `Álcool: ${requiredText(d.alcoolQuantidade)}`,
+                        requiredText(d.outrasSubstanciasDetalhes) && `Outras substâncias: ${requiredText(d.outrasSubstanciasDetalhes)}`,
+                      ].filter(Boolean).join(' | ');
                       d.alergiaTipos = fd.getAll('alergiaTipos').join(', ');
                       d.petTipos = fd.getAll('petTipos').join(', ');
                       if (d.temAlergia === 'Não') { d.alergias = ''; d.alergiaTipos = ''; }
@@ -3088,7 +3641,8 @@ export default function App() {
                       const censoDefaultFields = [
                         'moradia', 'motivoRua', 'motivoRuaOutro', 'programas', 'outroPrograma',
                         'convive', 'religiao', 'empregado', 'profissao', 'responsavelPed',
-                        'psicomotor', 'vacinaPed', 'drogas', 'detalhesDrogas', 'vidaSexual',
+                        'psicomotor', 'vacinaPed', 'drogas', 'detalhesDrogas',
+                        'tabacoQuantidade', 'alcoolQuantidade', 'outrasSubstanciasDetalhes', 'vidaSexual',
                         'preservativo', 'menarca', 'coitarca', 'dum', 'papanicolau', 'partos',
                         'cesareas', 'abortos', 'temMac', 'mac', 'planejamentoFamiliar',
                         'sintomas_ginec', 'medsUso', 'comorbidades', 'temAlergia', 'alergiaTipos',
@@ -3099,26 +3653,33 @@ export default function App() {
                       const censoData = applyFieldDefaults(d, Object.fromEntries(censoDefaultFields.map(field => [field, 'Não informado'])));
                       const completion = censoCompletion(censoData);
                       const hoje = new Date().toLocaleDateString('pt-BR');
+                      const now = Date.now();
+                      const censoRecord = {
+                        ...censoData,
+                        id,
+                        assistidoId: selectedAssistido.id,
+                        responsavel: userProfile.nome,
+                        dataAtu: hoje,
+                        localAcao: currentActionLocation.value,
+                        unidadeAcao: currentActionLocation.label,
+                        preenchimentoStatus: completion.status,
+                        preenchimentoPct: completion.percent,
+                        registradoEm: censoAtual?.registradoEm || now,
+                        atualizadoEm: now,
+                      };
+                      const assistidoPatch = {
+                        ultimoAtendimento: `Censo ${completion.status} em ${hoje}`,
+                        ultimoAtendimentoEm: now,
+                        chegadaAcaoData: hoje,
+                        chegadaAcaoEm: selectedAssistido.chegadaAcaoData === hoje ? selectedAssistido.chegadaAcaoEm : now,
+                      };
                       
                       const saved = await saveSafely(
                         async () => {
-                          await setDoc(doc(db, 'anamneses', id), {
-                            ...censoData,
-                            id,
-                            assistidoId: selectedAssistido.id,
-                            responsavel: userProfile.nome,
-                            dataAtu: hoje,
-                            localAcao: currentActionLocation.value,
-                            unidadeAcao: currentActionLocation.label,
-                            preenchimentoStatus: completion.status,
-                            preenchimentoPct: completion.percent,
-                          }, { merge: true });
-                          await setDoc(doc(db, 'assistidos', selectedAssistido.id), {
-                            ultimoAtendimento: `Censo ${completion.status} em ${hoje}`,
-                            ultimoAtendimentoEm: Date.now(),
-                            chegadaAcaoData: hoje,
-                            chegadaAcaoEm: selectedAssistido.chegadaAcaoData === hoje ? selectedAssistido.chegadaAcaoEm : Date.now(),
-                          }, { merge: true });
+                          await setDoc(doc(db, 'anamneses', id), censoRecord, { merge: true });
+                          await setDoc(doc(db, 'assistidos', selectedAssistido.id), assistidoPatch, { merge: true });
+                          syncLocalRecord(setAnamneses, censoRecord);
+                          patchLocalAssistido(selectedAssistido.id, assistidoPatch);
                         },
                         completion.percent < 80 ? 'Censo salvo como parcial. Complete as informações pendentes.' : 'Censo gravado.'
                       );
@@ -3129,24 +3690,32 @@ export default function App() {
                       <div className="space-y-3">
                         <label className="text-[8px] font-black uppercase text-purple-600 tracking-widest border-l-2 border-purple-600 pl-2">1. Habitação e Realidade Social</label>
 
-                        <select name="moradia" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.moradia} className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] bg-white shadow-sm">
-                           <option value="">Situação de Moradia...</option>
-                           <option value="Morador de área descoberta">Morador de área descoberta</option>
-                           <option value="Endereço fixo">Endereço fixo</option>
-                           <option value="Moradias comunitárias">Moradias comunitárias</option>
-                           <option value="Abrigos">Abrigos</option>
-                        </select>
+                        <div className="mdm-auto-field" data-field-label="Situação de moradia">
+                          <select name="moradia" value={formToggles.moradia || ''} onChange={handleToggle} className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] bg-white shadow-sm">
+                             <option value="">Selecione a situação atual...</option>
+                             <option value="Morador de área descoberta">Morador de área descoberta</option>
+                             <option value="Endereço fixo">Endereço fixo</option>
+                             <option value="Moradias comunitárias">Moradias comunitárias</option>
+                             <option value="Abrigos">Abrigos</option>
+                          </select>
+                        </div>
                         
-                        <select name="motivoRua" onChange={handleToggle} value={formToggles.motivoRua || ''} className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] bg-white shadow-sm">
-                           <option value="">Se morador de rua, qual o motivo?</option>
-                           <option value="Conflito familiar">Conflito familiar</option>
-                           <option value="Desemprego">Desemprego</option>
-                           <option value="Uso de substancias">Uso de substâncias</option>
-                           <option value="Não se aplica">Não se aplica</option>
-                           <option value="Outro">Outro</option>
-                        </select>
-                        {formToggles.motivoRua === 'Outro' && (
-                           <input name="motivoRuaOutro" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.motivoRuaOutro} placeholder="Especifique o outro motivo..." className="w-full p-3 bg-blue-50 text-blue-900 rounded-xl border-none font-bold text-[10px] shadow-inner" />
+                        {normalizeStr(formToggles.moradia).includes('area descoberta') && (
+                          <>
+                            <div className="mdm-auto-field" data-field-label="Motivo de estar em área descoberta">
+                              <select name="motivoRua" onChange={handleToggle} value={formToggles.motivoRua || ''} className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] bg-white shadow-sm">
+                                 <option value="">Selecione o motivo informado...</option>
+                                 <option value="Conflito familiar">Conflito familiar</option>
+                                 <option value="Desemprego">Desemprego</option>
+                                 <option value="Uso de substancias">Uso de substâncias</option>
+                                 <option value="Não se aplica">Não se aplica</option>
+                                 <option value="Outro">Outro</option>
+                              </select>
+                            </div>
+                            {formToggles.motivoRua === 'Outro' && (
+                               <div className="mdm-auto-field" data-field-label="Especifique o outro motivo"><input aria-label="Especifique o outro motivo..." name="motivoRuaOutro" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.motivoRuaOutro} placeholder="" className="w-full p-3 bg-blue-50 text-blue-900 rounded-xl border-none font-bold text-[10px] shadow-inner" /></div>
+                            )}
+                          </>
                         )}
 
                         <div className="bg-gray-50 p-4 rounded-xl border border-gray-100">
@@ -3159,20 +3728,39 @@ export default function App() {
                              ))}
                            </div>
                            {safeIncludes(formToggles.programas, 'Outros') && (
-                             <input name="outroPrograma" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.outroPrograma} placeholder="Qual outro programa?" className="w-full p-2 mt-2 bg-white rounded-lg text-[9px] shadow-sm border-none" />
+                             <div className="mdm-auto-field" data-field-label="Qual outro programa"><input aria-label="Qual outro programa?" name="outroPrograma" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.outroPrograma} placeholder="" className="w-full p-2 mt-2 bg-white rounded-lg text-[9px] shadow-sm border-none" /></div>
                            )}
                         </div>
 
-                        <div className="grid grid-cols-2 gap-2">
-                           <input name="convive" type="number" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.convive} placeholder="Convive com qts pessoas?" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
-                           <input name="religiao" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.religiao} placeholder="Religião" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
+                        <div className="rounded-2xl border border-purple-100 bg-purple-50/30 p-4">
+                          <p className="mb-3 text-[7px] font-black uppercase tracking-widest text-purple-700">Rede, convivência e identificação social</p>
+                          <div className="grid grid-cols-2 gap-3">
+                             <div className="mdm-auto-field" data-field-label="Com quantas pessoas convive">
+                               <input aria-label="Com quantas pessoas convive" name="convive" type="number" inputMode="numeric" min="0" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.convive} placeholder="Ex.: 3" className="w-full p-3 bg-white rounded-xl border border-purple-100 font-bold text-[10px] shadow-sm" />
+                             </div>
+                             <div className="mdm-auto-field" data-field-label="Religião ou crença">
+                               <select name="religiao" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.religiao || 'Não informado'} className="w-full p-3 bg-white rounded-xl border border-purple-100 font-bold text-[10px] shadow-sm">
+                                  {RELIGIOES_CENSO.map(item => <option key={item} value={item}>{item}</option>)}
+                               </select>
+                             </div>
+                          </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-2">
-                           <select name="empregado" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.empregado} className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] bg-white shadow-sm">
-                              <option value="Não">Empregado: Não</option>
-                              <option value="Sim">Empregado: Sim</option>
-                           </select>
-                           <input name="profissao" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.profissao} placeholder="Função / Profissão" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
+
+                        <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+                          <p className="mb-3 text-[7px] font-black uppercase tracking-widest text-gray-500">Trabalho e ocupação</p>
+                          <div className="grid grid-cols-2 gap-3">
+                             <div className="mdm-auto-field" data-field-label="Situação de trabalho">
+                               <select name="empregado" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.empregado || 'Não'} className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner">
+                                  <option value="Não">Não trabalha no momento</option>
+                                  <option value="Sim">Trabalha atualmente</option>
+                                  <option value="Informal">Trabalho informal / bicos</option>
+                                  <option value="Não sabe informar">Não sabe informar</option>
+                               </select>
+                             </div>
+                             <div className="mdm-auto-field" data-field-label="Função, profissão ou fonte de renda">
+                               <input aria-label="Função, profissão ou fonte de renda" name="profissao" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.profissao} placeholder="Ex.: entregador, diarista, aposentado" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
+                             </div>
+                          </div>
                         </div>
                       </div>
 
@@ -3180,7 +3768,7 @@ export default function App() {
                       {calculateAgeNum(selectedAssistido.dataNascimento) <= 12 && (
                         <div className="space-y-3 pt-4 border-t border-gray-100">
                           <label className="text-[8px] font-black uppercase text-blue-600 tracking-widest border-l-2 border-blue-600 pl-2 flex items-center gap-2"><Baby size={12}/> Pediatria (0 a 12 Anos)</label>
-                          <input name="responsavelPed" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.responsavelPed} placeholder="Nome do Responsável" className="w-full p-3 bg-blue-50/50 rounded-xl border-none font-bold text-xs shadow-sm" />
+                          <div className="mdm-auto-field" data-field-label="Nome do Responsável"><input aria-label="Nome do Responsável" name="responsavelPed" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.responsavelPed} placeholder="" className="w-full p-3 bg-blue-50/50 rounded-xl border-none font-bold text-xs shadow-sm" /></div>
                           <select name="psicomotor" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.psicomotor} className="w-full p-3 bg-blue-50/50 rounded-xl border-none font-bold text-[10px] bg-white shadow-sm">
                               <option value="">Desenvolvimento Psicomotor...</option>
                               <option value="Adequado para idade">Adequado para idade</option>
@@ -3195,48 +3783,78 @@ export default function App() {
                         </div>
                       )}
 
-                      {/* 2. Hábitos e Vícios */}
+                      {/* 2. Uso de substâncias */}
                       <div className="space-y-3 pt-4 border-t border-gray-100">
-                        <label className="text-[8px] font-black uppercase text-orange-600 tracking-widest border-l-2 border-orange-600 pl-2">2. Hábitos e Vícios</label>
-                        <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
-                           <p className="text-[7px] font-black uppercase text-gray-500 mb-2">Uso de Substâncias</p>
+                        <label className="text-[8px] font-black uppercase text-orange-600 tracking-widest border-l-2 border-orange-600 pl-2">2. Uso de substâncias</label>
+                        <div className="p-4 bg-orange-50/40 rounded-2xl border border-orange-100">
+                           <p className="text-[7px] font-black uppercase text-orange-700 mb-1">Substâncias referidas</p>
+                           <p className="mb-3 text-[8px] font-bold leading-snug text-orange-900/70">Marque apenas o que a pessoa informou. Se houver uso, registre frequência, quantidade e contexto.</p>
                            <div className="grid grid-cols-2 gap-2">
                              {LISTA_VICIOS.map(v => (
                                <label key={v} className="flex items-center gap-2 text-[8px] font-black text-gray-700">
-                                 <input type="checkbox" name="drogas" value={v} defaultChecked={safeIncludes(anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.drogas, v)} className="w-3 h-3 text-orange-500 rounded border-gray-300" /> {v}
+                                 <input type="checkbox" name="drogas" value={v} defaultChecked={safeIncludes(anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.drogas, v)} onChange={handleToggle} className="w-3 h-3 text-orange-500 rounded border-gray-300" /> {v}
                                </label>
                              ))}
                            </div>
                         </div>
-                        <textarea name="detalhesDrogas" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.detalhesDrogas} placeholder="Se usa substâncias, detalhar frequência e quantidade..." className="w-full p-3 bg-gray-50 rounded-xl border-none text-[10px] shadow-inner" rows="2"></textarea>
+                        {!normalizeStr(formToggles.drogas || anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.drogas || 'Não faz uso declarado').includes('nao faz uso') && (
+                          <div className="space-y-3 rounded-2xl border border-orange-100 bg-white p-4 shadow-sm">
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="mdm-auto-field" data-field-label="Tabaco: quantidade e frequência">
+                                <input name="tabacoQuantidade" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.tabacoQuantidade} placeholder="Ex.: 10 cigarros/dia" className="w-full rounded-xl border border-orange-100 bg-orange-50/40 p-3 text-[10px] font-bold shadow-sm" />
+                              </div>
+                              <div className="mdm-auto-field" data-field-label="Álcool: quantidade e frequência">
+                                <input name="alcoolQuantidade" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.alcoolQuantidade} placeholder="Ex.: fins de semana, 4 latas" className="w-full rounded-xl border border-orange-100 bg-orange-50/40 p-3 text-[10px] font-bold shadow-sm" />
+                              </div>
+                            </div>
+                            <div className="mdm-auto-field" data-field-label="Outras substâncias: frequência, quantidade e via de uso">
+                              <textarea name="outrasSubstanciasDetalhes" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.outrasSubstanciasDetalhes || anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.detalhesDrogas} placeholder="Ex.: crack diariamente; maconha 2x/semana; não soube informar quantidade" className="w-full p-3 bg-gray-50 rounded-xl border border-orange-100 text-[10px] shadow-inner" rows="3"></textarea>
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       {/* 3. Saúde Sexual/Ginecológica */}
                       <div className="space-y-3 pt-4 border-t border-gray-100">
                         <label className="text-[8px] font-black uppercase text-pink-600 tracking-widest border-l-2 border-pink-600 pl-2">3. Saúde Sexual e Reprodutiva</label>
-                        <div className="grid grid-cols-2 gap-2">
-                           <select name="vidaSexual" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.vidaSexual} className="w-full p-3 bg-pink-50/50 rounded-xl border-none font-bold text-[10px] bg-white shadow-sm">
-                              <option value="Não">Vida Sexual Ativa: Não</option>
-                              <option value="Sim">Vida Sexual Ativa: Sim</option>
-                           </select>
-                           <select name="preservativo" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.preservativo} className="w-full p-3 bg-pink-50/50 rounded-xl border-none font-bold text-[10px] bg-white shadow-sm">
-                              <option value="Não">Preservativo: Não</option>
-                              <option value="Sim">Preservativo: Sim</option>
-                           </select>
+                        <div className="grid grid-cols-2 gap-3">
+                           <div className="mdm-auto-field" data-field-label="Vida sexual ativa">
+                             <select name="vidaSexual" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.vidaSexual || 'Não'} className="w-full p-3 bg-white rounded-xl border border-pink-100 font-bold text-[10px] shadow-sm">
+                                <option value="Não">Não</option>
+                                <option value="Sim">Sim</option>
+                                <option value="Não sabe informar">Não sabe informar</option>
+                             </select>
+                           </div>
+                           <div className="mdm-auto-field" data-field-label="Uso de preservativo">
+                             <select name="preservativo" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.preservativo || 'Não'} className="w-full p-3 bg-white rounded-xl border border-pink-100 font-bold text-[10px] shadow-sm">
+                                <option value="Não">Não</option>
+                                <option value="Sim">Sim</option>
+                                <option value="Às vezes">Às vezes</option>
+                                <option value="Não sabe informar">Não sabe informar</option>
+                             </select>
+                           </div>
                         </div>
                         {(selectedAssistido.sexo === 'Feminino' || selectedAssistido.sexo === 'Outro') && (
                           <div className="p-4 bg-pink-50/30 rounded-xl border border-pink-100 space-y-3 mt-2">
                             <p className="text-[7px] font-black uppercase text-pink-600">Dados Reprodutivos</p>
-                            <div className="grid grid-cols-2 gap-2">
-                               <input name="menarca" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.menarca} placeholder="Menarca (Idade)" className="w-full p-3 bg-white rounded-lg text-[9px] shadow-sm" />
-                               <input name="coitarca" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.coitarca} placeholder="Coitarca (Idade)" className="w-full p-3 bg-white rounded-lg text-[9px] shadow-sm" />
-                               <input name="dum" type="date" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.dum} title="Data Última Menstruação" className="w-full p-3 bg-white rounded-lg text-[9px] shadow-sm" />
-                               <input name="papanicolau" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.papanicolau} placeholder="Último Papanicolau?" className="w-full p-3 bg-white rounded-lg text-[9px] shadow-sm" />
+                            <div className="grid grid-cols-2 gap-3">
+                               <div className="mdm-auto-field" data-field-label="Menarca (idade)">
+                                 <input aria-label="Menarca (idade)" name="menarca" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.menarca} placeholder="Ex.: 12" className="w-full p-3 bg-white rounded-lg text-[9px] shadow-sm" />
+                               </div>
+                               <div className="mdm-auto-field" data-field-label="Coitarca (idade)">
+                                 <input aria-label="Coitarca (idade)" name="coitarca" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.coitarca} placeholder="Ex.: 17" className="w-full p-3 bg-white rounded-lg text-[9px] shadow-sm" />
+                               </div>
+                               <div className="mdm-auto-field" data-field-label="Data da última menstruação">
+                                 <input name="dum" type="date" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.dum} title="Data da última menstruação" className="w-full p-3 bg-white rounded-lg text-[9px] shadow-sm" />
+                               </div>
+                               <div className="mdm-auto-field" data-field-label="Último Papanicolau">
+                                 <input aria-label="Último Papanicolau" name="papanicolau" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.papanicolau} placeholder="Ex.: 2024, nunca, não sabe" className="w-full p-3 bg-white rounded-lg text-[9px] shadow-sm" />
+                               </div>
                             </div>
-                            <div className="grid grid-cols-3 gap-2">
-                               <input name="partos" type="number" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.partos} placeholder="Partos Normais" className="w-full p-2 bg-white rounded-lg text-[9px] shadow-sm" />
-                               <input name="cesareas" type="number" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.cesareas} placeholder="Cesáreas" className="w-full p-2 bg-white rounded-lg text-[9px] shadow-sm" />
-                               <input name="abortos" type="number" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.abortos} placeholder="Abortos" className="w-full p-2 bg-white rounded-lg text-[9px] shadow-sm" />
+                            <div className="grid grid-cols-3 gap-3">
+                               <div className="mdm-auto-field" data-field-label="Partos normais"><input aria-label="Partos normais" name="partos" type="number" min="0" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.partos} placeholder="0" className="w-full p-2 bg-white rounded-lg text-[9px] shadow-sm" /></div>
+                               <div className="mdm-auto-field" data-field-label="Cesáreas"><input aria-label="Cesáreas" name="cesareas" type="number" min="0" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.cesareas} placeholder="0" className="w-full p-2 bg-white rounded-lg text-[9px] shadow-sm" /></div>
+                               <div className="mdm-auto-field" data-field-label="Abortos"><input aria-label="Abortos" name="abortos" type="number" min="0" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.abortos} placeholder="0" className="w-full p-2 bg-white rounded-lg text-[9px] shadow-sm" /></div>
                             </div>
                             <div className="space-y-2">
                                <select name="temMac" value={formToggles.temMac || 'Não'} onChange={handleToggle} className="w-full p-3 bg-white rounded-lg text-[9px] shadow-sm">
@@ -3244,13 +3862,16 @@ export default function App() {
                                   <option value="Sim">Usa Método Anticoncepcional (MAC)? Sim</option>
                                </select>
                                {formToggles.temMac === 'Sim' && (
-                                  <input name="mac" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.mac} placeholder="Qual Método Anticoncepcional?" className="w-full p-3 bg-white rounded-lg text-[9px] shadow-sm border border-pink-200" />
+                                  <div className="mdm-auto-field" data-field-label="Método anticoncepcional em uso"><input aria-label="Método anticoncepcional em uso" name="mac" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.mac} placeholder="Ex.: DIU, pílula, injetável" className="w-full p-3 bg-white rounded-lg text-[9px] shadow-sm border border-pink-200" /></div>
                                )}
-                               <select name="planejamentoFamiliar" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.planejamentoFamiliar} className="w-full p-3 bg-white rounded-lg text-[9px] shadow-sm">
-                                  <option value="">Gostaria de Plan. Familiar?</option>
-                                  <option value="Sim">Sim, gostaria</option>
-                                  <option value="Não">Não</option>
-                               </select>
+                               <div className="mdm-auto-field" data-field-label="Interesse em planejamento familiar">
+                                 <select name="planejamentoFamiliar" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.planejamentoFamiliar} className="w-full p-3 bg-white rounded-lg text-[9px] shadow-sm">
+                                    <option value="">Não informado</option>
+                                    <option value="Sim">Sim, gostaria</option>
+                                    <option value="Não">Não</option>
+                                    <option value="Não sabe informar">Não sabe informar</option>
+                                 </select>
+                               </div>
                             </div>
                             <div className="bg-white p-3 rounded-lg shadow-sm">
                               <p className="text-[7px] font-black uppercase text-pink-600 mb-1">Algum sintoma ginecológico?</p>
@@ -3269,7 +3890,7 @@ export default function App() {
                       {/* 4. Antecedentes e Comorbidades */}
                       <div className="space-y-3 pt-4 border-t border-gray-100">
                         <label className="text-[8px] font-black uppercase text-blue-600 tracking-widest border-l-2 border-blue-600 pl-2">4. Antecedentes Clínicos</label>
-                        <input name="medsUso" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.medsUso} placeholder="Faz uso de medicações? (Nomes e doses)" className="w-full p-3 bg-blue-50 text-blue-800 rounded-xl border-none font-bold text-xs shadow-inner" />
+                        <div className="mdm-auto-field" data-field-label="Faz uso de medicações? (Nomes e doses)"><input aria-label="Faz uso de medicações? (Nomes e doses)" name="medsUso" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.medsUso} placeholder="" className="w-full p-3 bg-blue-50 text-blue-800 rounded-xl border-none font-bold text-xs shadow-inner" /></div>
                         
                         <div className="bg-blue-50/30 p-4 rounded-2xl border border-blue-100">
                            <p className="text-[7px] font-black uppercase text-blue-600 mb-2">Antecedentes Pessoais (Comorbidades)</p>
@@ -3295,7 +3916,7 @@ export default function App() {
                                 </label>
                               ))}
                             </div>
-                            <input name="alergias" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.alergias} placeholder="Especifique a alergia..." className="w-full p-3 bg-white rounded-xl text-[10px] shadow-sm border border-red-200" />
+                            <div className="mdm-auto-field" data-field-label="Especifique a alergia"><input aria-label="Especifique a alergia..." name="alergias" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.alergias} placeholder="" className="w-full p-3 bg-white rounded-xl text-[10px] shadow-sm border border-red-200" /></div>
                           </div>
                         )}
 
@@ -3304,7 +3925,7 @@ export default function App() {
                            <option value="Sim">Cirurgias ou internações prévias? Sim</option>
                         </select>
                         {formToggles.temCirurgia === 'Sim' && (
-                           <textarea name="cirurgias" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.cirurgias} placeholder="Especifique as cirurgias/internações..." className="w-full p-3 bg-white rounded-xl text-[10px] shadow-sm border border-gray-200" rows="2"></textarea>
+                           <div className="mdm-auto-field" data-field-label="Especifique as cirurgias/internações"><textarea aria-label="Especifique as cirurgias/internações..." name="cirurgias" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.cirurgias} placeholder="" className="w-full p-3 bg-white rounded-xl text-[10px] shadow-sm border border-gray-200" rows="2"></textarea></div>
                         )}
                         
                         <select name="temFreqSaude" value={formToggles.temFreqSaude || 'Não'} onChange={handleToggle} className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-sm">
@@ -3312,7 +3933,7 @@ export default function App() {
                            <option value="Sim">Frequentou serviço de saúde no último mês? Sim</option>
                         </select>
                         {formToggles.temFreqSaude === 'Sim' && (
-                          <input name="freqSaude" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.freqSaude} placeholder="Quantas vezes e em qual serviço?" className="w-full p-3 bg-white rounded-xl border border-gray-200 font-bold text-[10px] shadow-sm" />
+                          <div className="mdm-auto-field" data-field-label="Quantas vezes e em qual serviço"><input aria-label="Quantas vezes e em qual serviço?" name="freqSaude" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.freqSaude} placeholder="" className="w-full p-3 bg-white rounded-xl border border-gray-200 font-bold text-[10px] shadow-sm" /></div>
                         )}
                       </div>
 
@@ -3336,15 +3957,15 @@ export default function App() {
                            <option value="Sim">Faz ou já fez tratamento psiquiátrico? Sim</option>
                         </select>
                         {formToggles.temPsi === 'Sim' && (
-                           <input name="tratamentoPsi" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.tratamentoPsi} placeholder="Especifique os tratamentos ou medicações..." className="w-full p-3 bg-white rounded-xl text-[10px] shadow-sm border border-purple-200" />
+                           <div className="mdm-auto-field" data-field-label="Especifique os tratamentos ou medicações"><input aria-label="Especifique os tratamentos ou medicações..." name="tratamentoPsi" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.tratamentoPsi} placeholder="" className="w-full p-3 bg-white rounded-xl text-[10px] shadow-sm border border-purple-200" /></div>
                         )}
                       </div>
 
                       {/* 6. Nutricional */}
                       <div className="space-y-3 pt-4 border-t border-gray-100">
                         <label className="text-[8px] font-black uppercase text-lime-600 tracking-widest border-l-2 border-lime-600 pl-2">6. Segurança Alimentar</label>
-                         <div className="space-y-1">
-                           <label className="text-[7px] font-black uppercase text-gray-500 ml-2">Apetite atual</label>
+                         <div className="mdm-question-field">
+                           <label>Apetite atual</label>
                            <select name="apetite" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.apetite} className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[9px] bg-white shadow-sm">
                               <option value="">Apetite...</option>
                               <option value="Normal">Normal</option>
@@ -3352,8 +3973,8 @@ export default function App() {
                               <option value="Diminuído">Diminuído</option>
                            </select>
                          </div>
-                         <div className="space-y-1">
-                           <label className="text-[7px] font-black uppercase text-gray-500 ml-2">No último mês, na maioria dos dias, quantas vezes conseguiu comer por dia?</label>
+                         <div className="mdm-question-field">
+                           <label>No último mês, na maioria dos dias, quantas refeições conseguiu fazer por dia?</label>
                            <select name="refeicoes" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.refeicoes} className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[9px] bg-white shadow-sm">
                               <option value="">Refeições por dia...</option>
                               <option value="Não comi a maioria dos dias">Não comi a maioria dos dias</option>
@@ -3364,8 +3985,8 @@ export default function App() {
                               <option value="Cinco ou mais">5+ por dia</option>
                            </select>
                          </div>
-                         <div className="space-y-1">
-                           <label className="text-[7px] font-black uppercase text-gray-500 ml-2">No último mês, na maioria dos dias, quantas frutas comeu por dia?</label>
+                         <div className="mdm-question-field">
+                           <label>No último mês, na maioria dos dias, quantas porções de frutas comeu por dia?</label>
                            <select name="frutas" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.frutas} className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[9px] bg-white shadow-sm">
                               <option value="">Frutas por dia...</option>
                               <option value="Não comi a maioria dos dias">Não comi a maioria dos dias</option>
@@ -3376,8 +3997,8 @@ export default function App() {
                               <option value="Cinco ou mais">5+ por dia</option>
                            </select>
                          </div>
-                         <div className="space-y-1">
-                           <label className="text-[7px] font-black uppercase text-gray-500 ml-2">No último mês, quantas garrafas de 500 mL de água costumava beber por dia?</label>
+                         <div className="mdm-question-field">
+                           <label>No último mês, quantas garrafas de 500 mL de água costumava beber por dia?</label>
                            <select name="agua" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.agua} className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[9px] bg-white shadow-sm">
                               <option value="">Garrafas de água por dia...</option>
                               <option value="Nenhuma">Nenhuma</option>
@@ -3387,16 +4008,18 @@ export default function App() {
                               <option value="Quatro ou mais">Quatro ou mais</option>
                            </select>
                          </div>
-                         <label className="text-[7px] font-black uppercase text-red-700 ml-2 block">No último mês, quantas vezes ficou um dia inteiro sem comer por falta de comida ou dinheiro?</label>
-                         <select name="semComer" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.semComer} className="w-full p-3 bg-red-50 text-red-800 rounded-xl border-none font-bold text-[10px] shadow-sm">
-                           <option value="">Selecione a frequência...</option>
-                           <option value="Nenhuma vez">Nenhuma vez</option>
-                           <option value="Um dia no mês">Um dia no mês</option>
-                           <option value="Dois a tres dias no mes">2 a 3 dias no mês</option>
-                           <option value="Um dia por semana">Um dia por semana</option>
-                           <option value="Dois ou três dias por semana">2 ou 3 dias por semana</option>
-                           <option value="Quase todos os dias">Quase todos os dias</option>
-                        </select>
+                         <div className="mdm-question-field is-risk rounded-2xl border border-red-100 bg-red-50/40 p-3">
+                           <label>No último mês, quantas vezes ficou um dia inteiro sem comer por falta de comida ou dinheiro?</label>
+                           <select name="semComer" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.semComer} className="w-full p-3 bg-red-50 text-red-800 rounded-xl border-none font-bold text-[10px] shadow-sm">
+                             <option value="">Selecione a frequência...</option>
+                             <option value="Nenhuma vez">Nenhuma vez</option>
+                             <option value="Um dia no mês">Um dia no mês</option>
+                             <option value="Dois a tres dias no mes">2 a 3 dias no mês</option>
+                             <option value="Um dia por semana">Um dia por semana</option>
+                             <option value="Dois ou três dias por semana">2 ou 3 dias por semana</option>
+                             <option value="Quase todos os dias">Quase todos os dias</option>
+                          </select>
+                         </div>
                       </div>
 
                       {/* 7. Pets */}
@@ -3415,7 +4038,7 @@ export default function App() {
                                 </label>
                               ))}
                             </div>
-                            <input name="pets" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.pets} placeholder="Quantidade, nome ou outro animal..." className="w-full p-3 bg-white rounded-xl text-[10px] shadow-sm border border-rose-200" />
+                            <div className="mdm-auto-field" data-field-label="Quantidade, nome ou outro animal"><input aria-label="Quantidade, nome ou outro animal..." name="pets" defaultValue={anamneses.find(a=>a.assistidoId===selectedAssistido.id)?.pets} placeholder="" className="w-full p-3 bg-white rounded-xl text-[10px] shadow-sm border border-rose-200" /></div>
                           </div>
                         )}
                       </div>
@@ -3433,9 +4056,13 @@ export default function App() {
           {currentView === 'triagem' && selectedAssistido && (() => {
              const hoje = new Date().toLocaleDateString('pt-BR');
              const triagemHoje = triagens.find(t => String(t.assistidoId) === String(selectedAssistido.id) && t.data === hoje);
+             const prioridadeAtual = formToggles.prioridadeCuidado || triagemHoje?.prioridadeCuidado || 'Rotina';
+             const imcAtual = calculateImc(formToggles.peso || triagemHoje?.peso, formToggles.altura || triagemHoje?.altura);
+             const attentionOptions = TRIAGE_ATTENTION_OPTIONS.filter(item => prioridadeAtual === 'Crítica' || !normalizeStr(item).includes('situacao critica'));
 
              return (
              <div className="p-4 animate-fade-in pb-32 text-left">
+                <PatientHeader assistido={selectedAssistido} triagem={triagemHoje} censo={anamneses.find(a => String(a.assistidoId) === String(selectedAssistido.id))} />
                 <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-100">
                    <div className="flex justify-between items-center mb-6 border-b pb-4">
                       <div className="flex items-center gap-3">
@@ -3451,13 +4078,31 @@ export default function App() {
                       const d = Object.fromEntries(fd);
                       d.encaminhamento = fd.getAll('enc').join(', ');
                       d.sinaisAtencao = fd.getAll('sinaisAtencao').join(', ');
+                      d.sinaisFisicosAssociados = exclusiveList(fd.getAll('sinaisFisicosAssociados'), 'Ausência de sinal físico relevante');
+                      if (d.usaMedicacaoTriagem === 'Sim') {
+                        d.medicacaoUso = [requiredText(d.medicacaoFarmaco), requiredText(d.medicacaoDose)].filter(Boolean).join(' - ');
+                      } else {
+                        d.medicacaoFarmaco = '';
+                        d.medicacaoDose = '';
+                        d.medicacaoUso = '';
+                      }
                       const triagemData = applyFieldDefaults(d, {
                         pa: 'Não informado',
                         fc: 'Não informado',
                         fr: 'Não informado',
                         spo2: 'Não informado',
+                        queixaPrincipal: 'Não informado',
+                        temperatura: 'Não informado',
                         peso: 'Não informado',
                         altura: 'Não informado',
+                        imc: 'Não informado',
+                        usaMedicacaoTriagem: 'Não',
+                        medicacaoFarmaco: 'Não se aplica',
+                        medicacaoDose: 'Não se aplica',
+                        medicacaoUso: 'Não se aplica',
+                        estadoNutricionalAparente: 'Não informado',
+                        sinaisFisicosAssociados: 'Ausência de sinal físico relevante',
+                        outroSinalFisicoTriagem: 'Não se aplica',
                         encaminhamento: 'Não informado',
                         prioridadeCuidado: 'Rotina',
                         sinaisAtencao: 'Sem atenção especial informada',
@@ -3468,40 +4113,120 @@ export default function App() {
                         observacaoCrianca: 'Não se aplica',
                       });
                       const completion = triageCompletion(triagemData);
+                      const now = Date.now();
+                      const triagemRecord = {
+                        ...triagemData,
+                        id,
+                        assistidoId: selectedAssistido.id,
+                        data: hoje,
+                        registradoEm: triagemHoje?.registradoEm || now,
+                        atualizadoEm: now,
+                        responsavel: userProfile.nome,
+                        localAcao: currentActionLocation.value,
+                        unidadeAcao: currentActionLocation.label,
+                        preenchimentoStatus: completion.status,
+                        preenchimentoPct: completion.percent,
+                      };
+                      const assistidoPatch = {
+                        ultimoAtendimento: `Triagem ${completion.status} em ${hoje}`,
+                        ultimoAtendimentoEm: now,
+                        chegadaAcaoData: hoje,
+                        chegadaAcaoEm: selectedAssistido.chegadaAcaoData === hoje ? selectedAssistido.chegadaAcaoEm : now,
+                      };
                       
                       const saved = await saveSafely(async () => {
-                        await setDoc(doc(db, 'triagens', id), {
-                          ...triagemData,
-                          id,
-                          assistidoId: selectedAssistido.id,
-                          data: hoje,
-                          registradoEm: triagemHoje?.registradoEm || Date.now(),
-                          atualizadoEm: Date.now(),
-                          responsavel: userProfile.nome,
-                          localAcao: currentActionLocation.value,
-                          unidadeAcao: currentActionLocation.label,
-                          preenchimentoStatus: completion.status,
-                          preenchimentoPct: completion.percent,
-                        }, { merge: true });
-                        await setDoc(doc(db, 'assistidos', selectedAssistido.id), {
-                          ultimoAtendimento: `Triagem ${completion.status} em ${hoje}`,
-                          ultimoAtendimentoEm: Date.now(),
-                          chegadaAcaoData: hoje,
-                          chegadaAcaoEm: selectedAssistido.chegadaAcaoData === hoje ? selectedAssistido.chegadaAcaoEm : Date.now(),
-                        }, { merge: true });
+                        await setDoc(doc(db, 'triagens', id), triagemRecord, { merge: true });
+                        await setDoc(doc(db, 'assistidos', selectedAssistido.id), assistidoPatch, { merge: true });
+                        syncLocalRecord(setTriagens, triagemRecord);
+                        patchLocalAssistido(selectedAssistido.id, assistidoPatch);
                       }, 'Triagem salva.');
                       if (saved) setCurrentView('ficha');
                    }} onChange={() => setHasUnsavedChanges(true)} className="space-y-6">
 
                       <div className="space-y-2 pt-2">
-                        <label className="text-[7px] font-black uppercase text-emerald-600 tracking-widest border-l-2 border-emerald-600 pl-2">Sinais Vitais (PA, FC, FR, SaO2)</label>
+                        <label className="text-[7px] font-black uppercase text-emerald-600 tracking-widest border-l-2 border-emerald-600 pl-2">Queixa principal e medicação</label>
+                        <div className="space-y-1">
+                          <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-400">Queixa principal</label>
+                          <input name="queixaPrincipal" defaultValue={triagemHoje?.queixaPrincipal} maxLength={120} className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
+                        </div>
                         <div className="grid grid-cols-2 gap-3">
-                           <input name="pa" defaultValue={triagemHoje?.pa} placeholder="P.A. (Ex: 120x80)" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
-                           <input name="fc" defaultValue={triagemHoje?.fc} placeholder="FC (bpm)" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
-                           <input name="fr" defaultValue={triagemHoje?.fr} placeholder="FR (irpm)" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
-                           <input name="spo2" defaultValue={triagemHoje?.spo2} placeholder="SaO2 (%)" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
-                           <input name="peso" defaultValue={triagemHoje?.peso} placeholder="Peso (kg)" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
-                           <input name="altura" type="number" inputMode="numeric" min="30" max="250" aria-label="Altura (cm)" defaultValue={triagemHoje?.altura} placeholder="Altura (cm)" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
+                          <div className="space-y-1">
+                            <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-400">Faz uso de medicação?</label>
+                            <select name="usaMedicacaoTriagem" value={formToggles.usaMedicacaoTriagem || 'Não'} onChange={handleToggle} className="w-full p-3 bg-white rounded-xl border border-emerald-100 font-bold text-[10px] shadow-sm">
+                              <option value="Não">Não</option>
+                              <option value="Sim">Sim</option>
+                              <option value="Não sabe informar">Não sabe informar</option>
+                            </select>
+                          </div>
+                          {formToggles.usaMedicacaoTriagem === 'Sim' && (
+                            <>
+                              <div className="space-y-1">
+                                <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-400">Fármaco</label>
+                                <input name="medicacaoFarmaco" defaultValue={triagemHoje?.medicacaoFarmaco} className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
+                              </div>
+                              <div className="space-y-1 col-span-2">
+                                <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-400">Dose, horário ou forma de uso</label>
+                                <input name="medicacaoDose" defaultValue={triagemHoje?.medicacaoDose} className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 pt-2">
+                        <label className="text-[7px] font-black uppercase text-emerald-600 tracking-widest border-l-2 border-emerald-600 pl-2">Sinais vitais e medidas</label>
+                        <div className="grid grid-cols-2 gap-3">
+                           <div className="mdm-auto-field" data-field-label="Pressão arterial">
+                             <input name="pa" defaultValue={triagemHoje?.pa} aria-label="Pressão arterial" placeholder="Ex.: 120x80" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
+                           </div>
+                           <div className="mdm-auto-field" data-field-label="Frequência cardíaca">
+                             <input name="fc" defaultValue={triagemHoje?.fc} aria-label="Frequência cardíaca" placeholder="BPM" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
+                           </div>
+                           <div className="mdm-auto-field" data-field-label="Frequência respiratória">
+                             <input name="fr" defaultValue={triagemHoje?.fr} aria-label="Frequência respiratória" placeholder="IRPM" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
+                           </div>
+                           <div className="mdm-auto-field" data-field-label="Saturação de oxigênio">
+                             <input name="spo2" defaultValue={triagemHoje?.spo2} aria-label="Saturação de oxigênio" placeholder="%" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
+                           </div>
+                           <div className="mdm-auto-field" data-field-label="Temperatura">
+                             <input name="temperatura" defaultValue={triagemHoje?.temperatura} aria-label="Temperatura" placeholder="°C" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
+                           </div>
+                           <div className="mdm-auto-field" data-field-label="Peso">
+                             <input aria-label="Peso" name="peso" inputMode="decimal" pattern="[0-9,.]*" onInput={(event) => { event.currentTarget.value = event.currentTarget.value.replace(/[^0-9,.]/g, ''); }} onChange={handleToggle} defaultValue={triagemHoje?.peso} placeholder="kg" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
+                           </div>
+                           <div className="mdm-auto-field" data-field-label="Altura">
+                             <input name="altura" onChange={handleToggle} type="number" inputMode="numeric" min="30" max="250" aria-label="Altura" defaultValue={triagemHoje?.altura} placeholder="cm" className="w-full p-3 bg-gray-50 rounded-xl border-none font-bold text-[10px] shadow-inner" />
+                           </div>
+                           <div className="mdm-auto-field" data-field-label="IMC calculado">
+                             <input name="imc" value={imcAtual || ''} readOnly aria-label="IMC calculado" placeholder="Automático" className="w-full p-3 bg-emerald-50 rounded-xl border border-emerald-100 font-black text-[10px] text-emerald-800 shadow-inner" />
+                           </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 rounded-[1.7rem] border border-blue-100 bg-blue-50/40 p-4 shadow-inner">
+                        <label className="text-[7px] font-black uppercase text-blue-700 tracking-widest border-l-2 border-blue-700 pl-2">Estado nutricional e sinais físicos</label>
+                        <div className="space-y-1">
+                          <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-500">Estado nutricional aparente</label>
+                          <select name="estadoNutricionalAparente" defaultValue={triagemHoje?.estadoNutricionalAparente || ''} className="w-full p-3 bg-white rounded-xl border border-blue-100 font-bold text-[10px] shadow-sm">
+                            <option value="">Selecione...</option>
+                            <option value="Eutrofia">Eutrofia</option>
+                            <option value="Baixo peso">Baixo peso</option>
+                            <option value="Sobrepeso">Sobrepeso</option>
+                            <option value="Obesidade">Obesidade</option>
+                            <option value="Não foi possível avaliar">Não foi possível avaliar</option>
+                          </select>
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 rounded-xl bg-white p-3 shadow-sm">
+                          {['Ausência de sinal físico relevante', 'Gordura abdominal aparente', 'Edema aparente (inchaço pernas/pés)', 'Feridas/lesões cutâneas aparentes', 'Perda muscular aparente', 'Sinais aparentes de desidratação', 'Palidez aparente', 'Icterícia'].map(item => (
+                            <label key={item} className="flex items-center gap-2 text-[8px] font-black text-gray-700">
+                              <input type="checkbox" name="sinaisFisicosAssociados" value={item} defaultChecked={safeIncludes(triagemHoje?.sinaisFisicosAssociados, item)} className="h-3.5 w-3.5 rounded text-blue-600" />
+                              {item}
+                            </label>
+                          ))}
+                        </div>
+                        <div className="space-y-1">
+                          <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-500">Outro sinal físico</label>
+                          <input name="outroSinalFisicoTriagem" defaultValue={triagemHoje?.outroSinalFisicoTriagem === 'Não se aplica' ? '' : triagemHoje?.outroSinalFisicoTriagem} className="w-full p-3 bg-white rounded-xl border border-blue-100 font-bold text-[10px] shadow-sm" />
                         </div>
                       </div>
 
@@ -3516,20 +4241,20 @@ export default function App() {
                           </div>
                         </div>
                         <label className="block text-[7px] font-black uppercase tracking-widest text-amber-800">Classificação de prioridade</label>
-                        <select name="prioridadeCuidado" defaultValue={triagemHoje?.prioridadeCuidado || 'Rotina'} className="w-full rounded-xl border border-amber-200 bg-white p-3 text-[9px] font-bold text-amber-950 shadow-sm">
+                        <select name="prioridadeCuidado" value={prioridadeAtual} onChange={handleToggle} className="w-full rounded-xl border border-amber-200 bg-white p-3 text-[9px] font-bold text-amber-950 shadow-sm">
                           <option value="Rotina">Sem prioridade adicional identificada</option>
                           <option value="Prioridade">Necessita atenção especial / prioridade</option>
                           <option value="Crítica">Situação crítica / atenção imediata</option>
                         </select>
                         <div className="grid grid-cols-1 gap-2 rounded-xl bg-white p-3 shadow-sm">
-                          {TRIAGE_ATTENTION_OPTIONS.map(item => (
+                          {attentionOptions.map(item => (
                             <label key={item} className="flex items-center gap-2 text-[8px] font-black text-gray-700">
                               <input type="checkbox" name="sinaisAtencao" value={item} defaultChecked={safeIncludes(triagemHoje?.sinaisAtencao, item)} className="h-3.5 w-3.5 rounded text-amber-600" />
                               {item}
                             </label>
                           ))}
                         </div>
-                        <textarea name="observacaoAtencao" defaultValue={triagemHoje?.observacaoAtencao === 'Sem observação adicional' ? '' : triagemHoje?.observacaoAtencao} rows="3" placeholder="Comentário de cuidado: como abordar, comunicação, acompanhante, risco ou suporte necessário..." className="w-full rounded-xl border border-amber-200 bg-white p-3 text-[9px] font-bold text-gray-700 shadow-sm"></textarea>
+                        <div className="mdm-auto-field" data-field-label="Comentário de cuidado: como abordar, comunicação, acompanhante, risco ou suporte necessário"><textarea name="observacaoAtencao" defaultValue={triagemHoje?.observacaoAtencao === 'Sem observação adicional' ? '' : triagemHoje?.observacaoAtencao} rows="3" aria-label="Comentário de cuidado: como abordar, comunicação, acompanhante, risco ou suporte necessário..." placeholder="" className="w-full rounded-xl border border-amber-200 bg-white p-3 text-[9px] font-bold text-gray-700 shadow-sm"></textarea></div>
                       </div>
 
                       {calculateAgeNum(selectedAssistido.dataNascimento) <= 12 && (
@@ -3543,10 +4268,10 @@ export default function App() {
                               <option value="Não">Não</option>
                               <option value="Não informado">Não informado</option>
                             </select>
-                            <input name="vinculoResponsavel" defaultValue={triagemHoje?.vinculoResponsavel === 'Não se aplica' ? '' : triagemHoje?.vinculoResponsavel} placeholder="Vínculo / nome" className="rounded-xl border border-sky-200 bg-white p-3 text-[9px] font-bold" />
+                            <div className="mdm-auto-field" data-field-label="Vínculo / nome"><input name="vinculoResponsavel" defaultValue={triagemHoje?.vinculoResponsavel === 'Não se aplica' ? '' : triagemHoje?.vinculoResponsavel} aria-label="Vínculo / nome" placeholder="" className="rounded-xl border border-sky-200 bg-white p-3 text-[9px] font-bold" /></div>
                           </div>
-                          <input name="necessidadesInfantis" defaultValue={triagemHoje?.necessidadesInfantis === 'Não se aplica' ? '' : triagemHoje?.necessidadesInfantis} placeholder="Brinquedoteca, ambiente calmo, comunicação, suporte..." className="w-full rounded-xl border border-sky-200 bg-white p-3 text-[9px] font-bold" />
-                          <textarea name="observacaoCrianca" defaultValue={triagemHoje?.observacaoCrianca === 'Não se aplica' ? '' : triagemHoje?.observacaoCrianca} rows="2" placeholder="Observação de proteção ou acolhimento infantil..." className="w-full rounded-xl border border-sky-200 bg-white p-3 text-[9px] font-bold"></textarea>
+                          <div className="mdm-auto-field" data-field-label="Brinquedoteca, ambiente calmo, comunicação, suporte"><input name="necessidadesInfantis" defaultValue={triagemHoje?.necessidadesInfantis === 'Não se aplica' ? '' : triagemHoje?.necessidadesInfantis} aria-label="Brinquedoteca, ambiente calmo, comunicação, suporte..." placeholder="" className="w-full rounded-xl border border-sky-200 bg-white p-3 text-[9px] font-bold" /></div>
+                          <div className="mdm-auto-field" data-field-label="Observação de proteção ou acolhimento infantil"><textarea name="observacaoCrianca" defaultValue={triagemHoje?.observacaoCrianca === 'Não se aplica' ? '' : triagemHoje?.observacaoCrianca} rows="2" aria-label="Observação de proteção ou acolhimento infantil..." placeholder="" className="w-full rounded-xl border border-sky-200 bg-white p-3 text-[9px] font-bold"></textarea></div>
                         </div>
                       )}
 
@@ -3574,6 +4299,7 @@ export default function App() {
           {/* ATENDIMENTOS ESPECIALIZADOS */}
           {currentView === 'atendimento' && selectedAssistido && (
              <div className="p-4 animate-fade-in pb-32 text-left">
+                <PatientHeader assistido={selectedAssistido} triagem={triagens.find(t => String(t.assistidoId) === String(selectedAssistido.id))} censo={anamneses.find(a => String(a.assistidoId) === String(selectedAssistido.id))} />
                 <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-100">
                    <div className="flex justify-between items-center mb-6 border-b pb-4">
                       <div className="flex items-center gap-2">
@@ -3588,22 +4314,42 @@ export default function App() {
                       e.preventDefault();
                       const fd = new FormData(e.target);
                       const id = selectedAtendimento?.id || Date.now().toString();
+                      const canWriteClinical = canWriteArea(currentArea);
                       const allowed = canFinalizeArea(currentArea);
-                      const status = allowed ? 'Concluído' : 'Aguardando Profissional';
+                      const status = allowed ? 'Concluído' : canWriteClinical ? 'Aguardando Profissional' : (selectedAtendimento?.status || 'Observação registrada');
                       
-                      const d = Object.fromEntries(fd);
+                      let d = Object.fromEntries(fd);
                       if (currentArea === 'Medicina Humana') {
                         d.topicos_queixa = fd.getAll('topicos_queixa').join(', ');
                         d.hd = fd.getAll('hd').join(', ');
                       }
-                      if (currentArea === 'Biomedicina' || currentArea === 'Vacinação') {
+                      if (currentArea === 'Vacinação') {
+                        const marcados = fd.getAll('vacinas_aplicadas');
+                        const outros = requiredText(fd.get('outras_vacinas'));
+                        d.vacinasAplicadas = [...marcados, outros && `Outras: ${outros}`].filter(Boolean).join(', ');
+                        d.testes_rapidos = d.vacinasAplicadas;
+                      }
+                      if (currentArea === 'Biomedicina') {
                         const marcados = fd.getAll('testes_rapidos');
                         const outros = requiredText(fd.get('outros_testes_rapidos'));
                         d.testes_rapidos = [...marcados, outros && `Outros: ${outros}`].filter(Boolean).join(', ');
+                        d.laudos = {
+                          hiv: fd.get('laudoHiv') || 'Não informado',
+                          glicemia: fd.get('glicemia') || 'Não informado',
+                          abo: fd.get('abo') || 'Não informado',
+                          urina: {
+                            leucocitos: fd.get('urinaLeucocitos') || 'Não informado',
+                            ph: fd.get('urinaPh') || 'Não informado',
+                            densidade: fd.get('urinaDensidade') || 'Não informado',
+                            observacoes: fd.get('urinaObs') || 'Não informado',
+                          },
+                        };
                       }
                       if (currentArea === 'Beleza de Rua') d.servicosBeleza = fd.getAll('servicosBeleza').join(', ');
+                      if (currentArea === 'Odontologia') d.quadrantesOdonto = fd.getAll('quadrantesOdonto').join(', ');
                       if (currentArea === 'Justiça de Rua') d.categoria_juridica = fd.getAll('categoria_juridica').join(', ');
                       if (currentArea === 'Doações' || currentArea === 'Doação') d.itens_entregues_cat = fd.getAll('itens_entregues_cat').join(', ');
+                      if (currentArea === 'Veterinária' || currentArea === 'Medicina Veterinaria') d.racaoPetEntregue = fd.get('racaoPetEntregue') || 'Não';
                       if (d.precisaFarmacia === 'Não') d.farmacia = '';
                       
                       // Campos específicos de nutrição multi-select
@@ -3614,12 +4360,21 @@ export default function App() {
                         d.encExterno = fd.getAll('encExterno').join(', ');
                       }
 
+                      if (!canWriteClinical) {
+                        d = {
+                          obsGeral: requiredText(fd.get('obsGeral')),
+                          comentarioLivre: requiredText(fd.get('obsGeral')),
+                        };
+                      }
+
                       const formFieldNames = [...new Set(Array.from(e.currentTarget.elements)
                         .map(el => el.name)
                         .filter(Boolean))]
                         .filter(name => !['photoData', 'tempPhoto'].includes(name));
-                      const filledFields = formFieldNames.filter(name => fd.getAll(name).some(value => requiredText(value))).length;
-                      const preenchimentoPct = formFieldNames.length ? Math.round((filledFields / formFieldNames.length) * 100) : 0;
+                      const effectiveFieldNames = canWriteClinical ? formFieldNames : ['obsGeral'];
+                      const filledFields = effectiveFieldNames.filter(name => fd.getAll(name).some(value => requiredText(value))).length;
+                      const preenchimentoPct = effectiveFieldNames.length ? Math.round((filledFields / effectiveFieldNames.length) * 100) : 0;
+                      const now = Date.now();
 
                       const baseData = {
                          id, assistidoId: selectedAssistido.id, data: new Date().toLocaleDateString('pt-BR'),
@@ -3627,7 +4382,7 @@ export default function App() {
                          localAcao: currentActionLocation.value,
                          unidadeAcao: currentActionLocation.label,
                          ...d, 
-                         vetPets: currentArea === 'Veterinária' || currentArea === 'Medicina Veterinaria' ? vetPets : null,
+                         vetPets: canWriteClinical && (currentArea === 'Veterinária' || currentArea === 'Medicina Veterinaria') ? vetPets : null,
                          extraAtendimento: atendimentoExtra,
                          preenchimentoPct,
                          preenchimentoStatus: completionLabel(preenchimentoPct),
@@ -3635,29 +4390,43 @@ export default function App() {
                          nomeAcademico: selectedAtendimento?.nomeAcademico || userProfile.nome,
                          nomeProfissional: allowed ? userProfile.nome : (selectedAtendimento?.nomeProfissional || ''),
                          operadorUid: userProfile.uid || user.uid,
+                         permissaoRegistro: canWriteClinical ? 'area_autorizada' : 'comentario_livre',
+                         registradoEm: selectedAtendimento?.registradoEm || now,
+                         atualizadoEm: now,
                       };
-                      const data = applyFieldDefaults(baseData, Object.fromEntries(formFieldNames.map(name => [name, 'Não informado'])));
+                      const data = applyFieldDefaults(baseData, Object.fromEntries(effectiveFieldNames.map(name => [name, 'Não informado'])));
+                      const assistidoPatch = {
+                        ultimoAtendimento: `${currentArea} em ${data.data}`,
+                        ultimoAtendimentoEm: now,
+                        chegadaAcaoData: data.data,
+                        chegadaAcaoEm: selectedAssistido.chegadaAcaoData === data.data ? selectedAssistido.chegadaAcaoEm : now,
+                      };
                       const saved = await saveSafely(
                         async () => {
                           await setDoc(doc(db, 'atendimentos', id), data, { merge: true });
-                          await setDoc(doc(db, 'assistidos', selectedAssistido.id), {
-                            ultimoAtendimento: `${currentArea} em ${data.data}`,
-                            ultimoAtendimentoEm: Date.now(),
-                            chegadaAcaoData: data.data,
-                            chegadaAcaoEm: selectedAssistido.chegadaAcaoData === data.data ? selectedAssistido.chegadaAcaoEm : Date.now(),
-                          }, { merge: true });
+                          await setDoc(doc(db, 'assistidos', selectedAssistido.id), assistidoPatch, { merge: true });
+                          syncLocalRecord(setAtendimentos, data);
+                          patchLocalAssistido(selectedAssistido.id, assistidoPatch);
                         },
-                        allowed ? 'Atendimento finalizado.' : 'Atendimento enviado para validacao.'
+                        allowed ? 'Atendimento finalizado.' : canWriteClinical ? 'Atendimento enviado para validacao.' : 'Observacao registrada no prontuario.'
                       );
                       if (saved) setCurrentView('ficha');
                    }} onChange={() => setHasUnsavedChanges(true)} className="space-y-6 text-left">
+                      {!canWriteArea(currentArea) && (
+                        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
+                          <p className="text-[8px] font-black uppercase tracking-widest">Leitura liberada + comentário livre</p>
+                          <p className="mt-1 text-[8px] font-bold leading-relaxed">
+                            Você pode consultar o histórico e registrar observações gerais úteis. Evolução técnica, diagnóstico e conduta ficam com a equipe da área.
+                          </p>
+                        </div>
+                      )}
                       
                       {/* --- MEDICINA HUMANA --- */}
                       {currentArea === 'Medicina Humana' && (
                          <div className="space-y-4">
                              <div className="space-y-3">
                                 <label className="text-[7px] font-black uppercase text-gray-400 ml-2">História Clínica Básica</label>
-                                <textarea name="qd" defaultValue={selectedAtendimento?.qd} placeholder="Queixa e Duração (QD)" className="w-full p-4 bg-gray-50 rounded-2xl border-none text-[10px] font-black shadow-inner" rows="3"></textarea>
+                                <div className="mdm-auto-field" data-field-label="Queixa e duração"><textarea name="qd" defaultValue={selectedAtendimento?.qd} aria-label="Queixa e duração" placeholder="Ex.: dor há 3 dias, início súbito, piora ao caminhar" className="w-full p-4 bg-gray-50 rounded-2xl border-none text-[10px] font-black shadow-inner" rows="3"></textarea></div>
                                 
                                 <div className="bg-gray-50 p-4 rounded-2xl shadow-inner border border-gray-100">
                                   <p className="text-[7px] font-black text-gray-500 uppercase mb-2">Tópicos da Queixa Principal</p>
@@ -3673,15 +4442,15 @@ export default function App() {
 
                              <div className="space-y-1.5 pt-4 border-t border-gray-100">
                                  <label className="text-[7px] font-black uppercase text-gray-400 ml-4">História Pregressa da Moléstia Atual (HPMA)</label>
-                                 <textarea name="hpma" defaultValue={selectedAtendimento?.hpma} rows="4" placeholder="Detalhe a queixa atual..." className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea>
+                                 <div className="mdm-auto-field" data-field-label="Detalhe a queixa atual"><textarea name="hpma" defaultValue={selectedAtendimento?.hpma} rows="4" aria-label="Detalhe a queixa atual..." placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea></div>
                              </div>
                              <div className="space-y-1.5">
                                  <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Interrogatório Sintomatológico (ISDA)</label>
-                                 <textarea name="isda" defaultValue={selectedAtendimento?.isda} rows="3" placeholder="Sintomas em outros aparelhos..." className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea>
+                                 <div className="mdm-auto-field" data-field-label="Sintomas em outros aparelhos"><textarea name="isda" defaultValue={selectedAtendimento?.isda} rows="3" aria-label="Sintomas em outros aparelhos..." placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea></div>
                              </div>
                              <div className="space-y-1.5">
                                  <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Exame Físico Dirigido (Objetivo)</label>
-                                 <textarea name="objetivo" defaultValue={selectedAtendimento?.objetivo} rows="4" placeholder="Ausculta, Inspeção..." className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea>
+                                 <div className="mdm-auto-field" data-field-label="Ausculta, Inspeção"><textarea name="objetivo" defaultValue={selectedAtendimento?.objetivo} rows="4" aria-label="Ausculta, Inspeção..." placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea></div>
                              </div>
                          </div>
                       )}
@@ -3691,15 +4460,15 @@ export default function App() {
                          <div className="space-y-4">
                              <div className="space-y-1.5">
                                  <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Evolução de Enfermagem</label>
-                                 <textarea name="evolucaoEnfermagem" defaultValue={selectedAtendimento?.evolucaoEnfermagem} rows="4" placeholder="Sinais vitais atuais, estado de consciência, integridade da pele, queixa do paciente..." className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea>
+                                 <div className="mdm-auto-field" data-field-label="Sinais vitais atuais, estado de consciência, integridade da pele, queixa do paciente"><textarea name="evolucaoEnfermagem" defaultValue={selectedAtendimento?.evolucaoEnfermagem} rows="4" aria-label="Sinais vitais atuais, estado de consciência, integridade da pele, queixa do paciente..." placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea></div>
                              </div>
                              <div className="space-y-1.5">
                                  <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Procedimento / Curativo Realizado</label>
-                                 <textarea name="procedimentoEnfermagem" defaultValue={selectedAtendimento?.procedimentoEnfermagem} rows="3" placeholder="Descrição do curativo, limpeza, medicação administrada..." className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea>
+                                 <div className="mdm-auto-field" data-field-label="Descrição do curativo, limpeza, medicação administrada"><textarea name="procedimentoEnfermagem" defaultValue={selectedAtendimento?.procedimentoEnfermagem} rows="3" aria-label="Descrição do curativo, limpeza, medicação administrada..." placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea></div>
                              </div>
                              <div className="space-y-1.5">
                                  <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Materiais Utilizados</label>
-                                 <textarea name="materiaisEnfermagem" defaultValue={selectedAtendimento?.materiaisEnfermagem} rows="2" placeholder="Gaze, soro fisiológico, atadura, pomadas..." className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea>
+                                 <div className="mdm-auto-field" data-field-label="Gaze, soro fisiológico, atadura, pomadas"><textarea name="materiaisEnfermagem" defaultValue={selectedAtendimento?.materiaisEnfermagem} rows="2" aria-label="Gaze, soro fisiológico, atadura, pomadas..." placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea></div>
                              </div>
                          </div>
                       )}
@@ -3709,11 +4478,37 @@ export default function App() {
                          <div className="space-y-4">
                              <div className="space-y-1.5">
                                  <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Dentes Afetados / Odontograma</label>
-                                 <input name="dentes" defaultValue={selectedAtendimento?.dentes} placeholder="Ex: 11, 21, 36..." className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100" />
+                                 <div className="mdm-auto-field" data-field-label="Ex: 11, 21, 36"><input name="dentes" defaultValue={selectedAtendimento?.dentes} aria-label="Ex: 11, 21, 36..." placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100" /></div>
+                             </div>
+                             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                               <div className="space-y-2 rounded-2xl border border-emerald-100 bg-emerald-50 p-3">
+                                 <label className="text-[7px] font-black uppercase text-emerald-700">Escala EVA de dor</label>
+                                 <input name="evaDor" type="range" min="0" max="10" defaultValue={selectedAtendimento?.evaDor || 0} aria-label="Escala EVA de dor de 0 a 10" className="w-full accent-emerald-600" />
+                                 <div className="flex justify-between text-[7px] font-black uppercase tracking-wider text-emerald-900/70">
+                                   <span>0 sem dor</span>
+                                   <span>10 pior dor</span>
+                                 </div>
+                               </div>
+                               <div className="rounded-2xl border border-blue-100 bg-blue-50 p-3">
+                                 <p className="mb-2 text-[7px] font-black uppercase tracking-widest text-blue-800">Quadrantes odontológicos</p>
+                                 <div className="grid grid-cols-2 gap-2">
+                                   {[
+                                     ['Q1', 'Superior direito'],
+                                     ['Q2', 'Superior esquerdo'],
+                                     ['Q3', 'Inferior esquerdo'],
+                                     ['Q4', 'Inferior direito'],
+                                   ].map(([q, label]) => (
+                                     <label key={q} className="flex items-start gap-1.5 rounded-lg bg-white px-2 py-2 text-[8px] font-black text-blue-800 shadow-sm">
+                                       <input type="checkbox" name="quadrantesOdonto" value={q} defaultChecked={safeIncludes(selectedAtendimento?.quadrantesOdonto, q)} className="mt-0.5 h-3 w-3 rounded text-blue-600" />
+                                       <span className="leading-tight"><strong>{q}</strong><br /><span className="text-[6px] font-bold text-blue-500">{label}</span></span>
+                                     </label>
+                                   ))}
+                                 </div>
+                               </div>
                              </div>
                              <div className="space-y-1.5">
                                  <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Evolução Odontológica</label>
-                                 <textarea name="subjetivo" defaultValue={selectedAtendimento?.subjetivo} rows="5" placeholder="Descrição dos achados e procedimentos..." className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea>
+                                 <div className="mdm-auto-field" data-field-label="Descrição dos achados e procedimentos"><textarea name="subjetivo" defaultValue={selectedAtendimento?.subjetivo} rows="5" aria-label="Descrição dos achados e procedimentos..." placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea></div>
                              </div>
                          </div>
                       )}
@@ -3722,7 +4517,40 @@ export default function App() {
                       {['Psicologia', 'Fisioterapia'].includes(currentArea) && (
                         <div className="space-y-1.5">
                              <label className="text-[7px] font-black uppercase text-gray-400 ml-4">{textosForms.evolucaoLabel || "Evolução Clínica"}</label>
-                             <textarea name="subjetivo" defaultValue={selectedAtendimento?.subjetivo} rows="6" placeholder={textosForms.evolucaoPlace || "Relato detalhado..."} className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100 leading-relaxed"></textarea>
+                            <textarea name="subjetivo" aria-label={textosForms.evolucaoPlace || "Relato detalhado"} defaultValue={selectedAtendimento?.subjetivo} rows="6" placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100 leading-relaxed"></textarea>
+                        </div>
+                      )}
+                      {currentArea === 'Fisioterapia' && (
+                        <div className="rounded-2xl border border-lime-100 bg-lime-50 p-4">
+                          <label className="text-[7px] font-black uppercase text-lime-700">Escala EVA de dor</label>
+                          <input name="evaDor" type="range" min="0" max="10" defaultValue={selectedAtendimento?.evaDor || 0} aria-label="Escala EVA de dor de 0 a 10" className="mt-3 w-full accent-lime-600" />
+                          <div className="mt-2 flex justify-between text-[7px] font-black uppercase tracking-wider text-lime-900/70">
+                            <span>0 sem dor</span>
+                            <span>10 pior dor</span>
+                          </div>
+                        </div>
+                      )}
+                      {currentArea === 'Psicologia' && (
+                        <div className="space-y-3 rounded-2xl border border-rose-100 bg-rose-50/60 p-4">
+                          <label className="text-[7px] font-black uppercase text-rose-700">Tipo de conduta</label>
+                          <select name="tipoCondutaPsicologia" value={formToggles.tipoCondutaPsicologia || ''} onChange={handleToggle} className="w-full rounded-xl border border-rose-100 bg-white p-3 text-[9px] font-bold text-gray-700">
+                            <option value="">Selecione...</option>
+                            <option value="Escuta ativa/acolhimento">Escuta ativa/acolhimento</option>
+                            <option value="Encaminhamento">Encaminhamento</option>
+                            <option value="Aconselhamento psicológico">Aconselhamento psicológico</option>
+                          </select>
+                          {safeIncludes(formToggles.tipoCondutaPsicologia || selectedAtendimento?.tipoCondutaPsicologia, 'Encaminhamento') && (
+                            <select name="encaminhamentoPsicologia" defaultValue={selectedAtendimento?.encaminhamentoPsicologia || ''} className="w-full rounded-xl border border-rose-100 bg-white p-3 text-[9px] font-bold">
+                              <option value="">Local de encaminhamento...</option>
+                              {LOCAIS_ENCAMINHAMENTO.map(item => <option key={item} value={item}>{item}</option>)}
+                            </select>
+                          )}
+                          {safeIncludes(formToggles.tipoCondutaPsicologia || selectedAtendimento?.tipoCondutaPsicologia, 'Aconselhamento') && (
+                            <select name="temaPsicologia" defaultValue={selectedAtendimento?.temaPsicologia || ''} className="w-full rounded-xl border border-rose-100 bg-white p-3 text-[9px] font-bold">
+                              <option value="">Tema trabalhado...</option>
+                              {TEMAS_ACONSELHAMENTO.map(item => <option key={item} value={item}>{item}</option>)}
+                            </select>
+                          )}
                         </div>
                       )}
                       
@@ -3731,20 +4559,20 @@ export default function App() {
                         <div className="space-y-4">
                              <div className="space-y-1.5">
                                  <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Avaliação Antropométrica e Clínica</label>
-                                 <textarea name="subjetivo" defaultValue={selectedAtendimento?.subjetivo} rows="4" placeholder="Relato, queixas GI, etc..." className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea>
+                                 <div className="mdm-auto-field" data-field-label="Relato, queixas GI, etc"><textarea name="subjetivo" defaultValue={selectedAtendimento?.subjetivo} rows="4" aria-label="Relato, queixas GI, etc..." placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner focus:ring-2 focus:ring-blue-100"></textarea></div>
                              </div>
                              
                              <div className="space-y-1.5">
                                <label className="text-[7px] font-black uppercase text-blue-600 ml-2">Estado Nutricional Aparente</label>
                                <select name="estado_nutricional" defaultValue={selectedAtendimento?.estado_nutricional} className="w-full p-4 bg-white rounded-2xl border border-blue-200 font-bold text-[10px] shadow-sm outline-none">
                                  <option value="">Selecione...</option>
-                                 <option value="Eutrofia aparente">Eutrofia aparente</option>
-                                 <option value="Baixo peso aparente">Baixo peso aparente</option>
-                                 <option value="Sobrepeso aparente">Sobrepeso aparente</option>
-                                 <option value="Obesidade aparente">Obesidade aparente</option>
+                                 <option value="Eutrofia">Eutrofia</option>
+                                 <option value="Baixo peso">Baixo peso</option>
+                                 <option value="Sobrepeso">Sobrepeso</option>
+                                 <option value="Obesidade">Obesidade</option>
                                  <option value="Não foi possível avaliar">Não foi possível avaliar</option>
                                </select>
-                               <input name="motivo_nao_avaliado" defaultValue={selectedAtendimento?.motivo_nao_avaliado} placeholder="Se não foi possível avaliar, especifique o porquê..." className="w-full p-3 mt-1 bg-white rounded-xl border border-blue-100 text-[9px] shadow-sm" />
+                               <div className="mdm-auto-field" data-field-label="Se não foi possível avaliar, especifique o porquê"><input name="motivo_nao_avaliado" defaultValue={selectedAtendimento?.motivo_nao_avaliado} aria-label="Se não foi possível avaliar, especifique o porquê..." placeholder="" className="w-full p-3 mt-1 bg-white rounded-xl border border-blue-100 text-[9px] shadow-sm" /></div>
                              </div>
                              
                              <div className="space-y-1.5">
@@ -3756,13 +4584,13 @@ export default function App() {
                                    </label>
                                  ))}
                                </div>
-                               <input name="outro_sinal_fisico" defaultValue={selectedAtendimento?.outro_sinal_fisico} placeholder="Outro sinal físico (especifique)..." className="w-full p-3 mt-1 bg-white rounded-xl border border-blue-100 text-[9px] shadow-sm" />
+                               <div className="mdm-auto-field" data-field-label="Outro sinal físico (especifique)"><input name="outro_sinal_fisico" defaultValue={selectedAtendimento?.outro_sinal_fisico} aria-label="Outro sinal físico (especifique)..." placeholder="" className="w-full p-3 mt-1 bg-white rounded-xl border border-blue-100 text-[9px] shadow-sm" /></div>
                              </div>
                              
                              <div className="space-y-1.5">
                                <label className="text-[7px] font-black uppercase text-emerald-600 ml-2">Tipo principal de abordagem</label>
                                <div className="grid grid-cols-1 gap-2 bg-emerald-50 p-4 rounded-2xl border border-emerald-100 shadow-sm">
-                                 {['Escuta ativa/acolhimento', 'Encaminhamento', 'Aconselhamento Nutricional'].map(t => (
+                                 {['Escuta ativa/acolhimento', 'Encaminhamento', 'Aconselhamento'].map(t => (
                                    <label key={t} className="flex items-center gap-2 text-[9px] font-black text-gray-700 cursor-pointer">
                                      <input type="checkbox" name="abordagem_nutri" value={t} checked={safeIncludes(formToggles.abordagemNutri || selectedAtendimento?.abordagem_nutri, t)} onChange={(e) => {
                                         const current = formToggles.abordagemNutri ? formToggles.abordagemNutri.split(',') : (selectedAtendimento?.abordagem_nutri ? selectedAtendimento.abordagem_nutri.split(',') : []);
@@ -3775,35 +4603,37 @@ export default function App() {
                                </div>
                              </div>
 
-                             {safeIncludes(formToggles.abordagemNutri || selectedAtendimento?.abordagem_nutri, 'Aconselhamento Nutricional') && (
+                             {safeIncludes(formToggles.abordagemNutri || selectedAtendimento?.abordagem_nutri, 'Aconselhamento') && (
                                <div className="space-y-1.5 bg-emerald-100/50 p-4 rounded-2xl border border-emerald-200">
                                  <label className="text-[7px] font-black uppercase text-emerald-800 ml-2">Temas Abordados no Aconselhamento</label>
                                  <div className="grid grid-cols-1 gap-2">
-                                   {['Alimentação durante uso de álcool/substâncias', 'Estrutura/frequência de refeições', 'Hidratação', 'Consumo de alimentos in natura', 'Consumo de alimentos ultraprocessados', 'Consumo de açúcar', 'Consumo de sal', 'Consumo de gordura', 'Organização da alimentação (doação, bom prato)', 'Mastigação/deglutição', 'Segurança dos alimentos (higiene/armazenamento)', 'Suplementação'].map(t => (
+                                   {TEMAS_ACONSELHAMENTO.map(t => (
                                      <label key={t} className="flex items-center gap-2 text-[8px] font-black text-emerald-900 cursor-pointer">
                                        <input type="checkbox" name="temas_nutri" value={t} defaultChecked={safeIncludes(selectedAtendimento?.temas_nutri, t)} className="w-3 h-3 text-emerald-600 rounded border-emerald-300" /> {t}
                                      </label>
                                    ))}
                                  </div>
-                                 <input name="outro_tema_nutri" defaultValue={selectedAtendimento?.outro_tema_nutri} placeholder="Outro tema abordado..." className="w-full p-3 mt-2 bg-white rounded-xl border border-emerald-100 text-[9px] shadow-sm" />
+                                 <div className="mdm-auto-field" data-field-label="Outro tema abordado"><input name="outro_tema_nutri" defaultValue={selectedAtendimento?.outro_tema_nutri} aria-label="Outro tema abordado..." placeholder="" className="w-full p-3 mt-2 bg-white rounded-xl border border-emerald-100 text-[9px] shadow-sm" /></div>
                                </div>
                              )}
 
+                             {safeIncludes(formToggles.abordagemNutri || selectedAtendimento?.abordagem_nutri, 'Encaminhamento') && (
                              <div className="space-y-1.5">
-                                 <label className="text-[7px] font-black uppercase text-blue-600 ml-2">Encaminhamento da Nutrição:</label>
-                                 <div className="grid grid-cols-1 gap-2 bg-white p-3 rounded-2xl border border-blue-200 shadow-sm">
-                                   {['Externo: UBS', 'Externo: UPA', 'Externo: CAPS', 'Externo: Assistência Social', 'Interno: Assistência Social', 'Interno: Justiça', 'Interno: Médicos de Rua'].map(t => (
+                                  <label className="text-[7px] font-black uppercase text-blue-600 ml-2">Encaminhamento da Nutrição:</label>
+                                  <div className="grid grid-cols-1 gap-2 bg-white p-3 rounded-2xl border border-blue-200 shadow-sm">
+                                    {LOCAIS_ENCAMINHAMENTO.map(t => (
                                      <label key={t} className="flex items-center gap-2 text-[9px] font-black text-gray-700 cursor-pointer">
                                        <input type="checkbox" name="encExterno" value={t} defaultChecked={safeIncludes(selectedAtendimento?.encExterno, t)} className="w-4 h-4 text-blue-600 rounded border-gray-300" /> {t}
                                      </label>
                                    ))}
                                  </div>
-                                 <input name="encExterno_outro" defaultValue={selectedAtendimento?.encExterno_outro} placeholder="Outro encaminhamento..." className="w-full p-3 mt-1 bg-white rounded-xl border border-blue-100 text-[9px] shadow-sm" />
-                             </div>
+                                  <div className="mdm-auto-field" data-field-label="Outro encaminhamento"><input name="encExterno_outro" defaultValue={selectedAtendimento?.encExterno_outro} aria-label="Outro encaminhamento..." placeholder="" className="w-full p-3 mt-1 bg-white rounded-xl border border-blue-100 text-[9px] shadow-sm" /></div>
+                              </div>
+                              )}
 
                              <div className="space-y-1.5">
                                  <label className="text-[7px] font-black uppercase text-blue-600 ml-2">Conduta Nutricional / Observações Adicionais</label>
-                                 <textarea name="plano" defaultValue={selectedAtendimento?.plano} rows="3" placeholder="Conduta, orientações e observações do atendimento nutricional..." className="w-full p-4 bg-white rounded-2xl border border-blue-200 font-bold text-[10px] shadow-sm outline-none"></textarea>
+                                 <div className="mdm-auto-field" data-field-label="Conduta, orientações e observações do atendimento nutricional"><textarea name="plano" defaultValue={selectedAtendimento?.plano} rows="3" aria-label="Conduta, orientações e observações do atendimento nutricional..." placeholder="" className="w-full p-4 bg-white rounded-2xl border border-blue-200 font-bold text-[10px] shadow-sm outline-none"></textarea></div>
                              </div>
                         </div>
                       )}
@@ -3813,14 +4643,14 @@ export default function App() {
                         <div className="space-y-4">
                            <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Procedimentos Realizados / Vacinas</label>
                            <div className="grid grid-cols-2 gap-2 bg-gray-50 p-4 rounded-2xl border border-gray-200 shadow-inner">
-                             {['Influenza', 'COVID-19', 'Tétano'].map(item => (
+                             {VACINAS_APLICADAS.map(item => (
                                <label key={item} className="flex items-center gap-2 text-[9px] font-black text-gray-700 cursor-pointer">
-                                 <input type="checkbox" name="testes_rapidos" value={item} defaultChecked={safeIncludes(selectedAtendimento?.testes_rapidos, item)} className="w-4 h-4 text-blue-600 rounded border-gray-300 shadow-sm" /> {item}
+                                  <input type="checkbox" name="vacinas_aplicadas" value={item} defaultChecked={safeIncludes(selectedAtendimento?.vacinasAplicadas || selectedAtendimento?.testes_rapidos, item)} className="w-4 h-4 text-blue-600 rounded border-gray-300 shadow-sm" /> {item}
                                </label>
                              ))}
                            </div>
-                           <input name="outros_testes_rapidos" defaultValue={selectedAtendimento?.outros_testes_rapidos} placeholder="Outras vacinas aplicadas..." className="w-full p-4 bg-white rounded-2xl border border-blue-100 font-bold text-[10px] shadow-sm" />
-                           <textarea name="subjetivo" defaultValue={selectedAtendimento?.subjetivo} rows="3" placeholder="Intercorrências ou observações da vacinação..." className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea>
+                           <div className="mdm-auto-field" data-field-label="Se marcou Outras, descreva quais vacinas"><input name="outras_vacinas" defaultValue={selectedAtendimento?.outras_vacinas || selectedAtendimento?.outros_testes_rapidos} aria-label="Se marcou Outras, descreva quais vacinas..." placeholder="" className="w-full p-4 bg-white rounded-2xl border border-blue-100 font-bold text-[10px] shadow-sm" /></div>
+                           <div className="mdm-auto-field" data-field-label="Intercorrências ou observações da vacinação"><textarea name="subjetivo" defaultValue={selectedAtendimento?.subjetivo} rows="3" aria-label="Intercorrências ou observações da vacinação..." placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea></div>
                         </div>
                       )}
 
@@ -3841,8 +4671,28 @@ export default function App() {
                                </label>
                              ))}
                            </div>
-                           <input name="outros_testes_rapidos" defaultValue={selectedAtendimento?.outros_testes_rapidos} placeholder="Outros exames ou testes..." className="w-full p-4 bg-white rounded-2xl border border-blue-100 font-bold text-[10px] shadow-sm" />
-                           <textarea name="subjetivo" defaultValue={selectedAtendimento?.subjetivo} rows="3" placeholder="Resultados dos exames e observações (Laudo)..." className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea>
+                           <div className="mdm-auto-field" data-field-label="Outros exames ou testes"><input name="outros_testes_rapidos" defaultValue={selectedAtendimento?.outros_testes_rapidos} aria-label="Outros exames ou testes..." placeholder="" className="w-full p-4 bg-white rounded-2xl border border-blue-100 font-bold text-[10px] shadow-sm" /></div>
+                           <div className="grid grid-cols-2 gap-2 rounded-2xl border border-cyan-100 bg-cyan-50 p-4 shadow-inner">
+                             <select name="laudoHiv" defaultValue={selectedAtendimento?.laudos?.hiv || selectedAtendimento?.laudoHiv || ''} className="rounded-xl bg-white p-3 text-[9px] font-bold">
+                               <option value="">HIV...</option>
+                               <option value="Positivo">Positivo</option>
+                               <option value="Negativo">Negativo</option>
+                               <option value="Inconclusivo">Inconclusivo</option>
+                             </select>
+                             <div className="mdm-auto-field" data-field-label="Glicemia"><input name="glicemia" type="number" inputMode="decimal" defaultValue={selectedAtendimento?.laudos?.glicemia || selectedAtendimento?.glicemia || ''} aria-label="Glicemia" placeholder="" className="rounded-xl bg-white p-3 text-[9px] font-bold" /></div>
+                             <select name="abo" defaultValue={selectedAtendimento?.laudos?.abo || selectedAtendimento?.abo || ''} className="rounded-xl bg-white p-3 text-[9px] font-bold">
+                               <option value="">ABO/Rh...</option>
+                               <option value="A">A</option>
+                               <option value="B">B</option>
+                               <option value="AB">AB</option>
+                               <option value="O">O</option>
+                             </select>
+                             <div className="mdm-auto-field" data-field-label="Urina pH"><input name="urinaPh" type="number" step="0.1" inputMode="decimal" defaultValue={selectedAtendimento?.laudos?.urina?.ph || selectedAtendimento?.urinaPh || ''} aria-label="Urina pH" placeholder="" className="rounded-xl bg-white p-3 text-[9px] font-bold" /></div>
+                             <div className="mdm-auto-field" data-field-label="Leucócitos"><input name="urinaLeucocitos" defaultValue={selectedAtendimento?.laudos?.urina?.leucocitos || selectedAtendimento?.urinaLeucocitos || ''} aria-label="Leucócitos" placeholder="" className="rounded-xl bg-white p-3 text-[9px] font-bold" /></div>
+                             <div className="mdm-auto-field" data-field-label="Densidade"><input name="urinaDensidade" defaultValue={selectedAtendimento?.laudos?.urina?.densidade || selectedAtendimento?.urinaDensidade || ''} aria-label="Densidade" placeholder="" className="rounded-xl bg-white p-3 text-[9px] font-bold" /></div>
+                           </div>
+                           <div className="mdm-auto-field" data-field-label="Observações da urina/EAS"><textarea name="urinaObs" defaultValue={selectedAtendimento?.laudos?.urina?.observacoes || selectedAtendimento?.urinaObs || ''} rows="2" aria-label="Observações da urina/EAS..." placeholder="" className="w-full p-4 bg-white rounded-2xl border border-cyan-100 font-bold text-[10px] shadow-sm"></textarea></div>
+                           <div className="mdm-auto-field" data-field-label="Resultados dos exames e observações (Laudo)"><textarea name="subjetivo" defaultValue={selectedAtendimento?.subjetivo} rows="3" aria-label="Resultados dos exames e observações (Laudo)..." placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea></div>
                         </div>
                       )}
 
@@ -3865,13 +4715,13 @@ export default function App() {
                                      </div>
                                    ) : (
                                      <>
-                                       <input name="hd" list="diag-lista" defaultValue={selectedAtendimento?.hd || selectedAtendimento?.diagnostico} className="w-full p-4 bg-white rounded-2xl border border-blue-200 font-black text-[10px] uppercase outline-none shadow-sm" placeholder="Busque a condicao (opcional)..." />
+                                       <div className="mdm-auto-field" data-field-label="Busque a condicao (opcional)"><input name="hd" list="diag-lista" defaultValue={selectedAtendimento?.hd || selectedAtendimento?.diagnostico} className="w-full p-4 bg-white rounded-2xl border border-blue-200 font-black text-[10px] uppercase outline-none shadow-sm" aria-label="Busque a condicao (opcional)..." placeholder="" /></div>
                                        <datalist id="diag-lista">
                                           {(DIAGNOSTICOS_POR_AREA[currentArea === 'Enfermagem / Curativos' || currentArea === 'Curativos' ? 'Enfermagem' : currentArea] || LISTA_COMORBIDADES).map(p => <option key={p} value={p} />)}
                                        </datalist>
                                      </>
                                    )}
-                                   <input name="outros_hd" defaultValue={selectedAtendimento?.outros_hd} placeholder="Outros diagnósticos..." className="w-full p-3 mt-1 bg-white rounded-xl border border-blue-100 text-[9px] shadow-sm" />
+                                   <div className="mdm-auto-field" data-field-label="Outros diagnósticos"><input name="outros_hd" defaultValue={selectedAtendimento?.outros_hd} aria-label="Outros diagnósticos..." placeholder="" className="w-full p-3 mt-1 bg-white rounded-xl border border-blue-100 text-[9px] shadow-sm" /></div>
                                 </div>
                               )}
 
@@ -3883,7 +4733,7 @@ export default function App() {
                                      <option value="Sim">Sim</option>
                                    </select>
                                    {formToggles.farmaciaAtendimento === 'Sim' && (
-                                     <input name="farmacia" defaultValue={selectedAtendimento?.farmacia} placeholder="Receituário ou posologia para retirada..." className="w-full p-4 bg-white rounded-2xl border border-blue-200 font-bold text-[10px] shadow-sm outline-none mt-1" />
+                                     <div className="mdm-auto-field" data-field-label="Receituário ou posologia para retirada"><input name="farmacia" defaultValue={selectedAtendimento?.farmacia} aria-label="Receituário ou posologia para retirada..." placeholder="" className="w-full p-4 bg-white rounded-2xl border border-blue-200 font-bold text-[10px] shadow-sm outline-none mt-1" /></div>
                                    )}
                                 </div>
                               )}
@@ -3900,13 +4750,13 @@ export default function App() {
 
                               <div className="space-y-1.5">
                                  <label className="text-[7px] font-black uppercase text-blue-600 ml-2">{textosForms.planoLabel || "Conduta Final / Orientações"}</label>
-                                 <textarea name="plano" defaultValue={selectedAtendimento?.plano} rows="3" placeholder={textosForms.planoPlace || "Orientações gerais, condutas..."} className="w-full p-4 bg-white rounded-2xl border border-blue-200 font-bold text-[10px] shadow-sm outline-none"></textarea>
+                                  <textarea name="plano" aria-label={textosForms.planoPlace || "Orientações gerais e condutas"} defaultValue={selectedAtendimento?.plano} rows="3" placeholder="" className="w-full p-4 bg-white rounded-2xl border border-blue-200 font-bold text-[10px] shadow-sm outline-none"></textarea>
                               </div>
 
                               {currentArea === 'Medicina Humana' && (
                                 <div className="space-y-1.5 pt-2 border-t border-blue-100">
                                    <label className="text-[7px] font-black uppercase text-blue-600 ml-2 flex items-center gap-1"><UserCheck size={8}/> Médico Formado Responsável</label>
-                                   <input name="medicoResponsavel" defaultValue={selectedAtendimento?.medicoResponsavel || userProfile.nome} className="w-full p-4 bg-white rounded-2xl border border-blue-200 font-black text-[10px] uppercase shadow-sm" placeholder="Nome do Médico..." />
+                                   <div className="mdm-auto-field" data-field-label="Nome do Médico"><input name="medicoResponsavel" defaultValue={selectedAtendimento?.medicoResponsavel || userProfile.nome} className="w-full p-4 bg-white rounded-2xl border border-blue-200 font-black text-[10px] uppercase shadow-sm" aria-label="Nome do Médico..." placeholder="" /></div>
                                 </div>
                               )}
                             </div>
@@ -3924,11 +4774,18 @@ export default function App() {
                               <label className="text-[8px] font-black uppercase text-rose-600 flex items-center gap-2 ml-2"><Dog size={12}/> Ficha Clínica Animais</label>
                               <button type="button" onClick={() => setVetPets([...vetPets, { id: Date.now(), nome: '', especie: '', situacao: '', avaliacao: '', conduta: '', diagVet: '' }])} className="text-[8px] font-black uppercase tracking-widest bg-rose-600 text-white px-3 py-2 rounded-xl shadow-md active:scale-95"> + Adicionar Pet</button>
                            </div>
+                           <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
+                             <label className="flex items-center gap-2 text-[8px] font-black uppercase text-amber-800">
+                               <input type="checkbox" name="racaoPetEntregue" value="Sim" defaultChecked={selectedAtendimento?.racaoPetEntregue === 'Sim'} className="h-4 w-4 rounded text-amber-600" />
+                               Ração pet entregue neste atendimento
+                             </label>
+                             <div className="mdm-auto-field" data-field-label="Quantidade, tipo ou orientação sobre a ração"><input name="detalheRacaoPet" defaultValue={selectedAtendimento?.detalheRacaoPet || ''} aria-label="Quantidade, tipo ou orientação sobre a ração..." placeholder="" className="mt-3 w-full rounded-xl border border-amber-100 bg-white p-3 text-[9px] font-bold" /></div>
+                           </div>
                            {vetPets.map((pet, index) => (
                               <div key={pet.id} className="p-4 border border-rose-100 bg-rose-50/40 rounded-2xl space-y-3 shadow-inner">
                                  <div className="flex gap-2">
-                                    <input placeholder="Nome do Pet" value={pet.nome} onChange={e => { const newP = [...vetPets]; newP[index].nome = e.target.value; setVetPets(newP); }} className="w-full p-3 bg-white rounded-xl text-[10px] font-bold border border-rose-100 shadow-sm" />
-                                    <input placeholder="Espécie/Raça" value={pet.especie} onChange={e => { const newP = [...vetPets]; newP[index].especie = e.target.value; setVetPets(newP); }} className="w-full p-3 bg-white rounded-xl text-[10px] font-bold border border-rose-100 shadow-sm" />
+                                    <div className="mdm-auto-field" data-field-label="Nome do Pet"><input aria-label="Nome do Pet" placeholder="" value={pet.nome} onChange={e => { const newP = [...vetPets]; newP[index].nome = e.target.value; setVetPets(newP); }} className="w-full p-3 bg-white rounded-xl text-[10px] font-bold border border-rose-100 shadow-sm" /></div>
+                                    <div className="mdm-auto-field" data-field-label="Espécie/Raça"><input aria-label="Espécie/Raça" placeholder="" value={pet.especie} onChange={e => { const newP = [...vetPets]; newP[index].especie = e.target.value; setVetPets(newP); }} className="w-full p-3 bg-white rounded-xl text-[10px] font-bold border border-rose-100 shadow-sm" /></div>
                                  </div>
                                  <select value={pet.situacao} onChange={e => { const newP = [...vetPets]; newP[index].situacao = e.target.value; setVetPets(newP); }} className="w-full p-3 bg-white rounded-xl text-[10px] font-bold border border-rose-100 shadow-sm text-gray-700">
                                     <option value="">Status Clínico (Estatística)...</option>
@@ -3936,11 +4793,11 @@ export default function App() {
                                     <option value="Doença Leve/Moderada">Doença Leve/Moderada</option>
                                     <option value="Grave / Risco de Óbito">Grave / Risco de Óbito</option>
                                  </select>
-                                 <textarea placeholder="Avaliação Clínica Inicial..." value={pet.avaliacao} onChange={e => { const newP = [...vetPets]; newP[index].avaliacao = e.target.value; setVetPets(newP); }} rows="3" className="w-full p-3 bg-white rounded-xl text-[10px] border border-rose-100 shadow-inner"></textarea>
+                                 <div className="mdm-auto-field" data-field-label="Avaliação Clínica Inicial"><textarea aria-label="Avaliação Clínica Inicial..." placeholder="" value={pet.avaliacao} onChange={e => { const newP = [...vetPets]; newP[index].avaliacao = e.target.value; setVetPets(newP); }} rows="3" className="w-full p-3 bg-white rounded-xl text-[10px] border border-rose-100 shadow-inner"></textarea></div>
                                  {canFinalizeArea(currentArea) && (
                                     <>
-                                      <input placeholder="Diagnóstico Veterinário Principal..." value={pet.diagVet} onChange={e => { const newP = [...vetPets]; newP[index].diagVet = e.target.value; setVetPets(newP); }} className="w-full p-3 bg-white rounded-xl text-[10px] font-bold border border-rose-200 shadow-sm" />
-                                      <textarea placeholder="Prescrição / Conduta Veterinária (Profissional)..." value={pet.conduta} onChange={e => { const newP = [...vetPets]; newP[index].conduta = e.target.value; setVetPets(newP); }} rows="3" className="w-full p-3 bg-white rounded-xl text-[10px] border-2 border-rose-300 shadow-sm"></textarea>
+                                      <div className="mdm-auto-field" data-field-label="Diagnóstico Veterinário Principal"><input aria-label="Diagnóstico Veterinário Principal..." placeholder="" value={pet.diagVet} onChange={e => { const newP = [...vetPets]; newP[index].diagVet = e.target.value; setVetPets(newP); }} className="w-full p-3 bg-white rounded-xl text-[10px] font-bold border border-rose-200 shadow-sm" /></div>
+                                      <div className="mdm-auto-field" data-field-label="Prescrição / Conduta Veterinária (Profissional)"><textarea aria-label="Prescrição / Conduta Veterinária (Profissional)..." placeholder="" value={pet.conduta} onChange={e => { const newP = [...vetPets]; newP[index].conduta = e.target.value; setVetPets(newP); }} rows="3" className="w-full p-3 bg-white rounded-xl text-[10px] border-2 border-rose-300 shadow-sm"></textarea></div>
                                     </>
                                  )}
                               </div>
@@ -3966,8 +4823,8 @@ export default function App() {
                                 ))}
                               </div>
                            </div>
-                           <textarea name="demandaJuridica" defaultValue={selectedAtendimento?.demandaJuridica} rows="4" placeholder="Qual a necessidade legal do assistido? (2ª via de doc, benefícios, criminal...)" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea>
-                           <textarea name="acaoJuridica" defaultValue={selectedAtendimento?.acaoJuridica} rows="4" placeholder="Ações Tomadas / Orientações..." className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea>
+                           <div className="mdm-auto-field" data-field-label="Qual a necessidade legal do assistido? (2ª via de doc, benefícios, criminal)"><textarea name="demandaJuridica" defaultValue={selectedAtendimento?.demandaJuridica} rows="4" aria-label="Qual a necessidade legal do assistido? (2ª via de doc, benefícios, criminal...)" placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea></div>
+                           <div className="mdm-auto-field" data-field-label="Ações Tomadas / Orientações"><textarea name="acaoJuridica" defaultValue={selectedAtendimento?.acaoJuridica} rows="4" aria-label="Ações Tomadas / Orientações..." placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea></div>
                         </div>
                       )}
 
@@ -3976,7 +4833,7 @@ export default function App() {
                         <div className="space-y-4">
                            <div className="space-y-1.5">
                              <label className="text-[7px] font-black uppercase text-orange-600 ml-4">Itens Solicitados na Triagem</label>
-                             <textarea name="itensSolicitados" defaultValue={selectedAtendimento?.itensSolicitados} rows="2" placeholder="O que o assistido pediu? (Roupas, cobertor, kit higiene...)" className="w-full p-4 bg-orange-50/50 rounded-2xl border border-orange-100 font-bold text-[10px] shadow-inner"></textarea>
+                             <div className="mdm-auto-field" data-field-label="O que o assistido pediu? (Roupas, cobertor, kit higiene)"><textarea name="itensSolicitados" defaultValue={selectedAtendimento?.itensSolicitados} rows="2" aria-label="O que o assistido pediu? (Roupas, cobertor, kit higiene...)" placeholder="" className="w-full p-4 bg-orange-50/50 rounded-2xl border border-orange-100 font-bold text-[10px] shadow-inner"></textarea></div>
                            </div>
                            <div className="space-y-2">
                              <label className="text-[7px] font-black uppercase text-emerald-600 ml-4">Itens Entregues (Estatística)</label>
@@ -3988,7 +4845,7 @@ export default function App() {
                                 ))}
                               </div>
                            </div>
-                           <textarea name="itensEntregues" defaultValue={selectedAtendimento?.itensEntregues} rows="3" placeholder="Detalhes (ex: Calça M, Sapato 40...)" className="w-full p-4 bg-emerald-50/50 rounded-2xl border border-emerald-100 font-bold text-[10px] shadow-inner"></textarea>
+                           <div className="mdm-auto-field" data-field-label="Detalhes (ex: Calça M, Sapato 40)"><textarea name="itensEntregues" defaultValue={selectedAtendimento?.itensEntregues} rows="3" aria-label="Detalhes (ex: Calça M, Sapato 40...)" placeholder="" className="w-full p-4 bg-emerald-50/50 rounded-2xl border border-emerald-100 font-bold text-[10px] shadow-inner"></textarea></div>
                         </div>
                       )}
 
@@ -4003,51 +4860,51 @@ export default function App() {
                                </label>
                              ))}
                            </div>
-                           <textarea name="detalhesBeleza" defaultValue={selectedAtendimento?.detalhesBeleza} rows="3" placeholder="Mais algum detalhe ou procedimento realizado?" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea>
+                           <div className="mdm-auto-field" data-field-label="Mais algum detalhe ou procedimento realizado"><textarea name="detalhesBeleza" defaultValue={selectedAtendimento?.detalhesBeleza} rows="3" aria-label="Mais algum detalhe ou procedimento realizado?" placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea></div>
                         </div>
                       )}
 
                       {/* --- FORMULÁRIO: ACOLHIMENTO SOCIAL --- */}
                       {currentArea === 'Acolhimento Social' && (
                         <div className="space-y-4">
-                           <textarea name="demandaSocial" defaultValue={selectedAtendimento?.demandaSocial} rows="4" placeholder="Qual a vulnerabilidade mapeada? (Passagem, abrigo...)" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea>
-                           <textarea name="encaminhamentoSocial" defaultValue={selectedAtendimento?.encaminhamentoSocial} rows="3" placeholder="Para qual órgão o assistido foi direcionado?" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea>
+                           <div className="mdm-auto-field" data-field-label="Qual a vulnerabilidade mapeada? (Passagem, abrigo)"><textarea name="demandaSocial" defaultValue={selectedAtendimento?.demandaSocial} rows="4" aria-label="Qual a vulnerabilidade mapeada? (Passagem, abrigo...)" placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea></div>
+                           <div className="mdm-auto-field" data-field-label="Para qual órgão o assistido foi direcionado"><textarea name="encaminhamentoSocial" defaultValue={selectedAtendimento?.encaminhamentoSocial} rows="3" aria-label="Para qual órgão o assistido foi direcionado?" placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea></div>
                         </div>
                       )}
 
                       {currentArea === 'Apoio à Mulher' && (
                         <div className="space-y-4">
                            <label className="text-[7px] font-black uppercase text-rose-700 ml-4">Acolhimento protegido</label>
-                           <textarea name="demandaMulher" defaultValue={selectedAtendimento?.demandaMulher} rows="3" placeholder="Demanda apresentada e cuidado necessário, sem expor detalhes desnecessários..." className="w-full p-4 bg-rose-50/60 rounded-2xl border border-rose-100 font-bold text-[10px] shadow-inner"></textarea>
+                           <div className="mdm-auto-field" data-field-label="Demanda apresentada e cuidado necessário, sem expor detalhes desnecessários"><textarea name="demandaMulher" defaultValue={selectedAtendimento?.demandaMulher} rows="3" aria-label="Demanda apresentada e cuidado necessário, sem expor detalhes desnecessários..." placeholder="" className="w-full p-4 bg-rose-50/60 rounded-2xl border border-rose-100 font-bold text-[10px] shadow-inner"></textarea></div>
                            <select name="riscoMulher" defaultValue={selectedAtendimento?.riscoMulher || 'Não informado'} className="w-full p-4 bg-white rounded-2xl border border-rose-100 font-bold text-[10px] shadow-sm text-gray-700">
                              <option value="Não informado">Risco imediato não informado</option>
                              <option value="Não identificado">Sem risco imediato identificado</option>
                              <option value="Prioridade">Necessita apoio prioritário</option>
                              <option value="Crítico">Risco crítico / acionar rede de proteção</option>
                            </select>
-                           <textarea name="encaminhamentoMulher" defaultValue={selectedAtendimento?.encaminhamentoMulher} rows="3" placeholder="Encaminhamento seguro, rede de apoio ou orientação oferecida..." className="w-full p-4 bg-white rounded-2xl border border-rose-100 font-bold text-[10px] shadow-sm"></textarea>
+                           <div className="mdm-auto-field" data-field-label="Encaminhamento seguro, rede de apoio ou orientação oferecida"><textarea name="encaminhamentoMulher" defaultValue={selectedAtendimento?.encaminhamentoMulher} rows="3" aria-label="Encaminhamento seguro, rede de apoio ou orientação oferecida..." placeholder="" className="w-full p-4 bg-white rounded-2xl border border-rose-100 font-bold text-[10px] shadow-sm"></textarea></div>
                         </div>
                       )}
 
                       {['Farmácia', 'Podologia', 'Atendimento Infantil / Brinquedoteca', 'Exames Clínicos', 'Emissão de Documentos'].includes(currentArea) && (
                         <div className="space-y-4">
                            <label className="text-[7px] font-black uppercase text-blue-600 ml-4">Registro direcionado da área</label>
-                           <input name="procedimentoArea" defaultValue={selectedAtendimento?.procedimentoArea} placeholder="Procedimento, serviço ou orientação realizada..." className="w-full p-4 bg-blue-50/60 rounded-2xl border border-blue-100 font-bold text-[10px] shadow-inner" />
-                           <textarea name="subjetivo" defaultValue={selectedAtendimento?.subjetivo} rows="3" placeholder="Contexto do atendimento, necessidade principal e achados relevantes..." className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea>
-                           <textarea name="plano" defaultValue={selectedAtendimento?.plano} rows="3" placeholder="Conduta, entrega, orientação ou encaminhamento..." className="w-full p-4 bg-white rounded-2xl border border-blue-100 font-bold text-[10px] shadow-sm"></textarea>
+                           <div className="mdm-auto-field" data-field-label="Procedimento, serviço ou orientação realizada"><input name="procedimentoArea" defaultValue={selectedAtendimento?.procedimentoArea} aria-label="Procedimento, serviço ou orientação realizada..." placeholder="" className="w-full p-4 bg-blue-50/60 rounded-2xl border border-blue-100 font-bold text-[10px] shadow-inner" /></div>
+                           <div className="mdm-auto-field" data-field-label="Contexto do atendimento, necessidade principal e achados relevantes"><textarea name="subjetivo" defaultValue={selectedAtendimento?.subjetivo} rows="3" aria-label="Contexto do atendimento, necessidade principal e achados relevantes..." placeholder="" className="w-full p-4 bg-gray-50 rounded-2xl border-none font-bold text-[10px] shadow-inner"></textarea></div>
+                           <div className="mdm-auto-field" data-field-label="Conduta, entrega, orientação ou encaminhamento"><textarea name="plano" defaultValue={selectedAtendimento?.plano} rows="3" aria-label="Conduta, entrega, orientação ou encaminhamento..." placeholder="" className="w-full p-4 bg-white rounded-2xl border border-blue-100 font-bold text-[10px] shadow-sm"></textarea></div>
                         </div>
                       )}
 
                       {/* OBSERVAÇÃO GERAL (TODAS AS ÁREAS) */}
                       <div className="pt-4 border-t border-gray-100 space-y-1.5">
                          <label className="text-[7px] font-black uppercase text-gray-400 ml-4">Observações Gerais Multidisciplinares</label>
-                         <textarea name="obsGeral" defaultValue={selectedAtendimento?.obsGeral} rows="2" placeholder="Algo importante para outras áreas saberem (Alerta, risco...)?" className="w-full p-4 bg-yellow-50/50 rounded-xl border border-yellow-100 font-bold text-[9px] text-gray-700 shadow-inner"></textarea>
+                         <div className="mdm-auto-field" data-field-label="Algo importante para outras áreas saberem (Alerta, risco)"><textarea name="obsGeral" defaultValue={selectedAtendimento?.obsGeral} rows="2" aria-label="Algo importante para outras áreas saberem (Alerta, risco...)?" placeholder="" className="w-full p-4 bg-yellow-50/50 rounded-xl border border-yellow-100 font-bold text-[9px] text-gray-700 shadow-inner"></textarea></div>
                       </div>
 
                       <div className="flex gap-4 pt-4 text-center">
                          <button type="button" onClick={handleBack} className="flex-1 bg-gray-100 text-gray-500 font-black py-4 rounded-2xl uppercase tracking-widest text-[8px] active:scale-95 transition-all">Cancelar</button>
                          <button type="submit" disabled={isSaving} className="flex-[2.5] bg-blue-600 disabled:opacity-60 text-white font-black py-4 rounded-2xl shadow-xl uppercase tracking-widest text-[8px] border-b-4 border-blue-900 active:scale-95 transition-all">
-                           {isSaving ? 'Salvando...' : canFinalizeArea(currentArea) ? 'Assinar e Concluir' : 'Submeter Validação'}
+                           {isSaving ? 'Salvando...' : canFinalizeArea(currentArea) ? 'Assinar e Concluir' : canWriteArea(currentArea) ? 'Submeter para Validação' : 'Salvar Observação'}
                          </button>
                       </div>
                    </form>
@@ -4060,7 +4917,7 @@ export default function App() {
             const query = normalizeStr(adminUserSearch);
             const listedUsers = managedUsers.filter(managedUser => !query || [
               managedUser.nome, managedUser.email, roleLabel(managedUser.role),
-              professionLabel(managedUser.profissao),
+              professionLabel(managedUser.profissao), managedUser.filial,
             ].some(value => normalizeStr(value).includes(query)));
 
             return (
@@ -4085,6 +4942,55 @@ export default function App() {
                   <input value={adminUserSearch} onChange={event => setAdminUserSearch(event.target.value)} placeholder="Pesquisar nome, e-mail ou area" className="w-full rounded-2xl border border-gray-100 bg-white py-4 pl-11 pr-4 text-[10px] font-bold text-gray-700 shadow-sm outline-none focus:border-[#292f63]" />
                 </div>
 
+                {canPromoteUsers && (
+                  <div className="space-y-4 rounded-[1.7rem] border border-gray-100 bg-white p-4 shadow-sm">
+                    <div className="flex items-center gap-3">
+                      <div className="rounded-xl bg-[#eef2fb] p-2.5 text-[#292f63]"><MapPin size={16} /></div>
+                      <div>
+                        <p className="text-[7px] font-black uppercase tracking-[0.28em] text-gray-400">Configuração dinâmica</p>
+                        <p className="text-[11px] font-black uppercase text-[#111a39]">Locais de ação e filiais</p>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-[7px] font-black uppercase tracking-widest text-gray-400">Filiais da equipe</p>
+                      <div className="flex flex-wrap gap-2">
+                        {filiaisEquipe.map(filial => (
+                          <button key={filial} type="button" onClick={() => removeFilialSetting(filial)} className="rounded-lg bg-sky-50 px-2 py-1.5 text-[7px] font-black uppercase text-sky-700 active:scale-95">
+                            {filial} ×
+                          </button>
+                        ))}
+                      </div>
+                      <form onSubmit={addFilialSetting} className="flex gap-2">
+                        <div className="mdm-auto-field" data-field-label="Nova filial"><input name="filial" aria-label="Nova filial" placeholder="" className="min-w-0 flex-1 rounded-xl bg-gray-50 p-3 text-[9px] font-bold outline-none" /></div>
+                        <button className="rounded-xl bg-[#292f63] px-3 text-[7px] font-black uppercase tracking-widest text-white">Adicionar</button>
+                      </form>
+                    </div>
+                    <div className="space-y-2 border-t border-gray-100 pt-4">
+                      <p className="text-[7px] font-black uppercase tracking-widest text-gray-400">Locais de ação</p>
+                      <div className="space-y-2">
+                        {actionLocations.map(location => (
+                          <div key={location.value} className="flex items-center justify-between gap-2 rounded-xl bg-gray-50 p-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-[9px] font-black uppercase text-[#111a39]">{location.label}</p>
+                              <p className="truncate text-[7px] font-bold text-gray-500">{location.city} • {location.neighborhood} • {location.unit}</p>
+                            </div>
+                            <button type="button" onClick={() => removeActionLocationSetting(location.value)} className="rounded-lg bg-red-50 p-2 text-red-500 active:scale-95" aria-label={`Remover ${location.label}`}>
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <form onSubmit={addActionLocationSetting} className="grid grid-cols-2 gap-2">
+                        <div className="mdm-auto-field" data-field-label="Nome do local"><input name="label" aria-label="Nome do local" placeholder="" className="rounded-xl bg-gray-50 p-3 text-[9px] font-bold outline-none" /></div>
+                        <div className="mdm-auto-field" data-field-label="Cidade"><input name="city" aria-label="Cidade" placeholder="" className="rounded-xl bg-gray-50 p-3 text-[9px] font-bold outline-none" /></div>
+                        <div className="mdm-auto-field" data-field-label="Bairro / praça"><input name="neighborhood" aria-label="Bairro / praça" placeholder="" className="rounded-xl bg-gray-50 p-3 text-[9px] font-bold outline-none" /></div>
+                        <div className="mdm-auto-field" data-field-label="Unidade/código"><input name="unit" aria-label="Unidade/código" placeholder="" className="rounded-xl bg-gray-50 p-3 text-[9px] font-bold outline-none" /></div>
+                        <button className="col-span-2 rounded-xl bg-[#292f63] py-3 text-[7px] font-black uppercase tracking-widest text-white">Adicionar local de ação</button>
+                      </form>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex items-center justify-between px-1">
                   <p className="text-[8px] font-black uppercase tracking-widest text-gray-400">{listedUsers.length} usuarios exibidos</p>
                   {userProfile.role === 'coordenador' && <span className="text-[7px] font-black uppercase tracking-wider text-amber-700">Admins protegidos</span>}
@@ -4100,7 +5006,7 @@ export default function App() {
                   const mayDelete = !isSelf && (canPromoteUsers || !privileged);
                   const isBusy = adminActionUid === managedUser.uid;
                   return (
-                    <div key={managedUser.uid} className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+                    <div key={managedUser.uid} onClick={() => canPromoteUsers && setEditingManagedUser(managedUser)} className={`rounded-2xl border border-gray-100 bg-white p-4 shadow-sm ${canPromoteUsers ? 'cursor-pointer active:scale-[0.99]' : ''}`}>
                       <div className="flex gap-3">
                         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#eef2fb] text-[#292f63]">
                           {managedUser.role === 'admin' ? <ShieldCheck size={19} /> : <User size={19} />}
@@ -4114,6 +5020,7 @@ export default function App() {
                           <div className="mt-2 flex flex-wrap gap-1.5">
                             <span className="rounded-md bg-[#eef2fb] px-2 py-1 text-[7px] font-black uppercase text-[#292f63]">{roleLabel(managedUser.role)}</span>
                             {managedUser.profissao && <span className="rounded-md bg-gray-50 px-2 py-1 text-[7px] font-black uppercase text-gray-500">{professionLabel(managedUser.profissao)}</span>}
+                            <span className="rounded-md bg-sky-50 px-2 py-1 text-[7px] font-black uppercase text-sky-700">Filial: {managedUser.filial || 'Santos'}</span>
                             <span className={`rounded-md px-2 py-1 text-[7px] font-black uppercase ${managedUser.emailVerified ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
                               {managedUser.emailVerified ? 'E-mail confirmado' : 'Confirmacao pendente'}
                             </span>
@@ -4123,17 +5030,17 @@ export default function App() {
 
                       <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-gray-50 pt-3">
                         {canPromoteUsers && managedUser.role !== 'coordenador' && (
-                          <button type="button" disabled={isBusy || isSelf} onClick={() => promoteManagedUser(managedUser, 'coordenador')} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-[7px] font-black uppercase tracking-wider text-gray-600 disabled:opacity-40">
+                          <button type="button" disabled={isBusy || isSelf} onClick={(event) => { event.stopPropagation(); promoteManagedUser(managedUser, 'coordenador'); }} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-[7px] font-black uppercase tracking-wider text-gray-600 disabled:opacity-40">
                             Tornar coordenacao
                           </button>
                         )}
                         {canPromoteUsers && managedUser.role !== 'admin' && (
-                          <button type="button" disabled={isBusy} onClick={() => promoteManagedUser(managedUser, 'admin')} className="rounded-lg bg-[#292f63] px-3 py-2 text-[7px] font-black uppercase tracking-wider text-white disabled:opacity-40">
+                          <button type="button" disabled={isBusy} onClick={(event) => { event.stopPropagation(); promoteManagedUser(managedUser, 'admin'); }} className="rounded-lg bg-[#292f63] px-3 py-2 text-[7px] font-black uppercase tracking-wider text-white disabled:opacity-40">
                             Tornar admin
                           </button>
                         )}
                         {mayDelete && (
-                          <button type="button" disabled={isBusy} title="Revogar acesso" onClick={() => deleteManagedUser(managedUser)} aria-label={`Revogar acesso de ${managedUser.email || managedUser.nome}`} className="rounded-lg border border-red-100 bg-red-50 p-2 text-red-600 disabled:opacity-40">
+                          <button type="button" disabled={isBusy} title="Revogar acesso" onClick={(event) => { event.stopPropagation(); deleteManagedUser(managedUser); }} aria-label={`Revogar acesso de ${managedUser.email || managedUser.nome}`} className="rounded-lg border border-red-100 bg-red-50 p-2 text-red-600 disabled:opacity-40">
                             <Trash2 size={13} />
                           </button>
                         )}
@@ -4141,412 +5048,82 @@ export default function App() {
                     </div>
                   );
                 })}
+
+                {editingManagedUser && canPromoteUsers && (
+                  <div className="fixed inset-0 z-[260] flex items-center justify-center bg-[#111a39]/70 p-5 backdrop-blur-sm">
+                    <form onSubmit={updateManagedUser} className="w-full max-w-sm rounded-[2rem] bg-white p-5 shadow-2xl">
+                      <div className="flex items-start justify-between gap-3 border-b border-gray-100 pb-4">
+                        <div>
+                          <p className="text-[7px] font-black uppercase tracking-[0.28em] text-gray-400">Edição administrativa</p>
+                          <h3 className="mt-1 text-lg font-black uppercase text-[#111a39]">{editingManagedUser.nome || 'Usuário'}</h3>
+                          <p className="mt-1 text-[8px] font-bold text-gray-500">{editingManagedUser.email || 'E-mail não informado'}</p>
+                        </div>
+                        <button type="button" onClick={() => setEditingManagedUser(null)} className="rounded-xl bg-gray-50 p-2 text-gray-400 active:scale-95"><X size={18} /></button>
+                      </div>
+                      <div className="mt-4 space-y-3">
+                        <div className="space-y-1">
+                          <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-400">Role</label>
+                          <select name="role" defaultValue={editingManagedUser.role || 'voluntario_eficiente'} className="w-full rounded-xl bg-gray-50 p-3 text-[10px] font-bold outline-none">
+                            <option value="admin">Admin</option>
+                            <option value="coordenador">Coordenador</option>
+                            <option value="voluntario_eficiente">Voluntário</option>
+                            <option value="colaborador_servico">Colaborador de serviço</option>
+                            <option value="academico">Acadêmico</option>
+                            <option value="profissional_formado">Profissional Formado</option>
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-400">Profissão / atuação</label>
+                          <select name="profissao" defaultValue={profileProfession(editingManagedUser) || 'apoio_operacional'} className="w-full rounded-xl bg-gray-50 p-3 text-[10px] font-bold outline-none">
+                            {PROFISSOES_CADASTRAVEIS.map(profissao => (
+                              <option key={profissao} value={profissao}>{professionLabel(profissao)}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="ml-2 text-[7px] font-black uppercase tracking-widest text-gray-400">Filial da equipe</label>
+                          <select name="filial" defaultValue={editingManagedUser.filial || 'Santos'} className="w-full rounded-xl bg-gray-50 p-3 text-[10px] font-bold outline-none">
+                            {filiaisEquipe.map(filial => <option key={filial} value={filial}>{filial}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="mt-5 flex gap-3">
+                        <button type="button" onClick={() => setEditingManagedUser(null)} className="flex-1 rounded-xl bg-gray-100 py-3 text-[8px] font-black uppercase tracking-widest text-gray-500 active:scale-95">Cancelar</button>
+                        <button disabled={adminActionUid === editingManagedUser.uid} className="flex-[2] rounded-xl bg-[#292f63] py-3 text-[8px] font-black uppercase tracking-widest text-white shadow-md disabled:opacity-50">
+                          {adminActionUid === editingManagedUser.uid ? 'Salvando...' : 'Salvar alterações'}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                )}
               </div>
             );
           })()}
 
           {currentView === 'stats' && (() => {
-            const { med, medTotal, odonto, odontoTotal, psico, psicoTotal } = getEstatisticasReais();
-            const genderRows = [
-              { label: 'Masculino', value: statsGeral.masc, color: 'bg-[#292f63]' },
-              { label: 'Feminino', value: statsGeral.fem, color: 'bg-[#ef312a]' },
-              { label: 'Outro', value: statsGeral.outro, color: 'bg-emerald-500' },
-              { label: 'Não informado', value: statsGeral.semInfo, color: 'bg-gray-300' },
-            ].filter(item => item.value > 0);
-            const genderBase = statsGeral.total || 1;
-            const percentOf = (value, total) => total ? Math.round((value / total) * 100) : 0;
-            
+            const diagnosticStats = getEstatisticasReais();
             return (
-            <div className="p-4 min-h-screen flex flex-col items-center justify-start space-y-6 pb-40 animate-fade-in">
-               
-               <div className="w-full text-left pt-4">
-                 <h2 className="text-2xl font-black text-gray-900 tracking-tighter italic leading-none">Dashboard MDM</h2>
-                 <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mt-1">Indicadores por área da ação</p>
-               </div>
-
-               {/* Abas */}
-               <div className="grid w-full grid-cols-3 gap-2">
-                  {['geral', 'clinica', 'social', 'vet', 'doacoes', 'justiça'].map(tab => (
-                    <button key={tab} onClick={() => setStatTab(tab)} className={`flex min-h-[42px] items-center justify-center rounded-lg border px-2 py-2 text-center text-[8px] font-black uppercase leading-tight tracking-wider transition-all shadow-sm ${statTab === tab ? 'bg-[#292f63] text-white border-[#292f63]' : 'bg-white text-gray-500 border-gray-200'}`}>
-                      {tab === 'vet' ? 'Veterinária' : tab === 'clinica' ? 'Saúde' : tab === 'doacoes' ? 'Doações' : tab === 'justiça' ? 'Justiça de Rua' : tab}
-                    </button>
-                  ))}
-               </div>
-
-               <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-gray-100 w-full space-y-6 flex-1">
-                  
-                  {statTab === 'geral' && (
-                    <div className="animate-fade-in text-left">
-                      <div className="flex items-end justify-between gap-5 border-b border-gray-100 pb-5">
-                        <div>
-                          <p className="text-[7px] font-black uppercase tracking-[0.2em] text-gray-400">Base registrada</p>
-                          <div className="mt-2 flex items-baseline gap-2">
-                            <p className="text-4xl font-black leading-none text-[#101932]">{statsGeral.total}</p>
-                            <p className="text-[9px] font-black uppercase tracking-wider text-gray-500">assistidos</p>
-                          </div>
-                        </div>
-                        <div className="border-l border-gray-100 pl-5 text-right">
-                          <p className="text-[7px] font-black uppercase tracking-[0.18em] text-emerald-700">Triagens hoje</p>
-                          <div className="mt-2 flex items-center justify-end gap-2 text-emerald-700">
-                            <HeartPulse size={17} />
-                            <p className="text-3xl font-black leading-none">{statsGeral.triagensHoje}</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="border-b border-gray-100 py-5">
-                        <div className="mb-4 flex items-center gap-2">
-                          <Clock size={13} className="text-[#292f63]" />
-                          <p className="text-[8px] font-black uppercase tracking-widest text-[#292f63]">Fluxo de atendimento hoje</p>
-                        </div>
-                        <div className="grid grid-cols-2 divide-x divide-gray-100">
-                          <div className="pr-4">
-                            <p className="text-3xl font-black leading-none text-amber-700">{queueWaiting.length}</p>
-                            <p className="mt-2 text-[7px] font-black uppercase tracking-widest text-gray-500">Aguardando ação</p>
-                            {queueCritical.length > 0 && <p className="mt-1 text-[7px] font-black uppercase text-red-600">{queueCritical.length} crítico{queueCritical.length !== 1 ? 's' : ''}</p>}
-                          </div>
-                          <div className="pl-4">
-                            <p className="text-3xl font-black leading-none text-emerald-700">{queueFinished.length}</p>
-                            <p className="mt-2 text-[7px] font-black uppercase tracking-widest text-gray-500">Finalizados</p>
-                            <p className="mt-1 text-[7px] font-bold uppercase text-gray-400">No plantão</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="pt-5">
-                        <p className="text-[8px] font-black uppercase tracking-widest text-gray-500">Gênero informado no cadastro</p>
-                        <div className="mt-4 flex h-2 overflow-hidden rounded-full bg-gray-100">
-                          {genderRows.map(item => (
-                            <div key={item.label} className={item.color} style={{ width: `${(item.value / genderBase) * 100}%` }} />
-                          ))}
-                        </div>
-                        <div className="mt-4 space-y-2.5">
-                          {genderRows.map(item => (
-                            <div key={item.label} className="flex items-center justify-between gap-3">
-                              <div className="flex items-center gap-2">
-                                <span className={`h-2 w-2 rounded-full ${item.color}`}></span>
-                                <p className="text-[9px] font-bold text-gray-600">{item.label}</p>
-                              </div>
-                              <p className="text-[9px] font-black text-gray-700">{item.value} <span className="font-bold text-gray-400">({Math.round((item.value / genderBase) * 100)}%)</span></p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="mt-5 border-t border-gray-100 pt-5">
-                        <p className="mb-4 flex items-center gap-2 text-[8px] font-black uppercase tracking-widest text-[#292f63]"><Activity size={13}/> Registros por área de atuação</p>
-                        {statsAtuacoes.areas.map(([area, count]) => (
-                          <div key={area} className="mb-3">
-                            <div className="mb-1.5 flex justify-between gap-3 text-[9px] font-bold text-gray-600">
-                              <span>{area}</span><span className="shrink-0 font-black text-[#292f63]">{count}</span>
-                            </div>
-                            <div className="h-1.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-[#292f63]" style={{ width: `${percentOf(count, statsAtuacoes.total)}%` }} /></div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {statTab === 'clinica' && (
-                    <div className="animate-fade-in text-left">
-                      <div className="flex items-end justify-between gap-5 border-b border-gray-100 pb-5">
-                        <div>
-                          <p className="text-[7px] font-black uppercase tracking-[0.2em] text-gray-400">Atendimentos de saúde</p>
-                          <div className="mt-2 flex items-baseline gap-2">
-                            <p className="text-4xl font-black leading-none text-[#101932]">{statsClinica.total}</p>
-                            <p className="text-[9px] font-black uppercase text-gray-500">registros</p>
-                          </div>
-                        </div>
-                        <div className="border-l border-gray-100 pl-5 text-right">
-                          <p className="text-[7px] font-black uppercase tracking-[0.18em] text-emerald-700">Hoje</p>
-                          <div className="mt-2 flex items-center justify-end gap-2 text-emerald-700">
-                            <Stethoscope size={17} />
-                            <p className="text-3xl font-black leading-none">{statsClinica.hoje}</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-3 divide-x divide-gray-100 border-b border-gray-100 py-5">
-                        <div className="pr-3">
-                          <p className="text-2xl font-black text-emerald-700">{statsClinica.concluidos}</p>
-                          <p className="mt-1 text-[7px] font-black uppercase text-gray-500">Concluídos</p>
-                        </div>
-                        <div className="px-3">
-                          <p className="text-2xl font-black text-amber-700">{statsClinica.pendentes}</p>
-                          <p className="mt-1 text-[7px] font-black uppercase text-gray-500">Validação</p>
-                        </div>
-                        <div className="pl-3">
-                          <p className="text-2xl font-black text-[#292f63]">{statsClinica.areas.length}</p>
-                          <p className="mt-1 text-[7px] font-black uppercase text-gray-500">Áreas ativas</p>
-                        </div>
-                      </div>
-
-                      <div className="border-b border-gray-100 py-5">
-                        <p className="mb-4 flex items-center gap-2 text-[8px] font-black uppercase tracking-widest text-[#292f63]"><Activity size={13}/> Atendimentos por especialidade</p>
-                        {statsClinica.areas.length === 0 ? <p className="text-[9px] italic text-gray-400">Sem registros de saúde.</p> : statsClinica.areas.map(([area, count]) => (
-                          <div key={area} className="mb-3">
-                            <div className="mb-1.5 flex justify-between gap-3 text-[9px] font-bold text-gray-600">
-                              <span>{area}</span><span className="shrink-0 font-black text-[#292f63]">{count}</span>
-                            </div>
-                            <div className="h-1.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-[#292f63]" style={{ width: `${percentOf(count, statsClinica.total)}%` }} /></div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="pt-5">
-                        <p className="mb-4 flex items-center gap-2 text-[8px] font-black uppercase tracking-widest text-gray-500"><FileText size={13}/> Condições mais registradas</p>
-                        {[
-                          { label: 'Medicina Humana', icon: <Stethoscope size={12}/>, rows: med, total: medTotal, accent: 'text-[#292f63]', bar: 'bg-[#292f63]' },
-                          { label: 'Odontologia', icon: <Smile size={12}/>, rows: odonto, total: odontoTotal, accent: 'text-emerald-700', bar: 'bg-emerald-600' },
-                          { label: 'Psicologia', icon: <Brain size={12}/>, rows: psico, total: psicoTotal, accent: 'text-rose-700', bar: 'bg-rose-600' },
-                        ].map(group => group.rows.length > 0 && (
-                          <div key={group.label} className="mb-5 last:mb-0">
-                            <p className={`mb-3 flex items-center gap-2 text-[8px] font-black uppercase tracking-widest ${group.accent}`}>{group.icon}{group.label}</p>
-                            {group.rows.map(([diagnostico, count]) => (
-                              <div key={diagnostico} className="mb-2.5">
-                                <div className="mb-1 flex justify-between gap-3 text-[8px] font-bold text-gray-600">
-                                  <span className="truncate">{diagnostico}</span><span className="shrink-0">{count}</span>
-                                </div>
-                                <div className="h-1 overflow-hidden rounded-full bg-gray-100"><div className={`h-full rounded-full ${group.bar}`} style={{ width: `${percentOf(count, group.total)}%` }} /></div>
-                              </div>
-                            ))}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {statTab === 'social' && (
-                    <div className="animate-fade-in text-left">
-                      <div className="flex items-end justify-between gap-5 border-b border-gray-100 pb-5">
-                        <div>
-                          <p className="text-[7px] font-black uppercase tracking-[0.2em] text-gray-400">Censos sociais</p>
-                          <div className="mt-2 flex items-baseline gap-2">
-                            <p className="text-4xl font-black leading-none text-[#101932]">{statsSocial.total}</p>
-                            <p className="text-[9px] font-black uppercase text-gray-500">registros</p>
-                          </div>
-                        </div>
-                        <div className="border-l border-gray-100 pl-5 text-right">
-                          <p className="text-[7px] font-black uppercase tracking-[0.18em] text-emerald-700">Ações hoje</p>
-                          <div className="mt-2 flex items-center justify-end gap-2 text-emerald-700">
-                            <HeartHandshake size={17} />
-                            <p className="text-3xl font-black leading-none">{statsSocial.hoje}</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-y-5 divide-x divide-gray-100 border-b border-gray-100 py-5">
-                        <div className="pr-4">
-                          <p className="text-2xl font-black text-amber-700">{statsSocial.moradiaRua}</p>
-                          <p className="mt-1 text-[7px] font-black uppercase text-gray-500">Área descoberta</p>
-                        </div>
-                        <div className="pl-4">
-                          <p className="text-2xl font-black text-red-700">{statsSocial.alimentar}</p>
-                          <p className="mt-1 text-[7px] font-black uppercase text-gray-500">Risco alimentar</p>
-                        </div>
-                        <div className="mt-4 pr-4">
-                          <p className="text-2xl font-black text-orange-700">{statsSocial.drogas}</p>
-                          <p className="mt-1 text-[7px] font-black uppercase text-gray-500">Substâncias</p>
-                        </div>
-                        <div className="mt-4 pl-4">
-                          <p className="text-2xl font-black text-rose-700">{statsSocial.saudeMental}</p>
-                          <p className="mt-1 text-[7px] font-black uppercase text-gray-500">Ideação relatada</p>
-                        </div>
-                      </div>
-
-                      <div className="border-b border-gray-100 py-5">
-                        <p className="mb-4 flex items-center gap-2 text-[8px] font-black uppercase tracking-widest text-[#292f63]"><HomeIcon size={13}/> Situação de moradia</p>
-                        {statsSocial.moradia.length === 0 ? <p className="text-[9px] italic text-gray-400">Sem registros sociais.</p> : statsSocial.moradia.map(([moradia, count]) => (
-                          <div key={moradia} className="mb-3">
-                            <div className="mb-1.5 flex justify-between gap-3 text-[9px] font-bold text-gray-600">
-                              <span>{moradia}</span><span className="shrink-0 font-black text-[#292f63]">{count} ({percentOf(count, statsSocial.total)}%)</span>
-                            </div>
-                            <div className="h-1.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-[#292f63]" style={{ width: `${percentOf(count, statsSocial.total)}%` }} /></div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="pt-5">
-                        <p className="mb-4 flex items-center gap-2 text-[8px] font-black uppercase tracking-widest text-gray-500"><HeartHandshake size={13}/> Atendimentos de suporte</p>
-                        {statsSocial.areas.length === 0 ? <p className="text-[9px] italic text-gray-400">Sem atendimentos sociais registrados.</p> : statsSocial.areas.map(([area, count]) => (
-                          <div key={area} className="mb-3 flex items-center justify-between border-b border-gray-50 pb-3 text-[9px]">
-                            <span className="font-bold text-gray-600">{area}</span>
-                            <span className="font-black text-[#292f63]">{count}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {statTab === 'vet' && (
-                    <div className="animate-fade-in text-left">
-                      <div className="flex items-end justify-between gap-5 border-b border-gray-100 pb-5">
-                        <div>
-                          <p className="text-[7px] font-black uppercase tracking-[0.2em] text-gray-400">Animais atendidos</p>
-                          <div className="mt-2 flex items-baseline gap-2">
-                            <p className="text-4xl font-black leading-none text-[#101932]">{statsVet.total}</p>
-                            <p className="text-[9px] font-black uppercase text-gray-500">pets</p>
-                          </div>
-                        </div>
-                        <div className="border-l border-gray-100 pl-5 text-right">
-                          <p className="text-[7px] font-black uppercase tracking-[0.18em] text-emerald-700">Consultas hoje</p>
-                          <div className="mt-2 flex items-center justify-end gap-2 text-emerald-700">
-                            <Dog size={17} />
-                            <p className="text-3xl font-black leading-none">{statsVet.hoje}</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="border-b border-gray-100 py-5">
-                        <p className="mb-4 flex items-center gap-2 text-[8px] font-black uppercase tracking-widest text-[#292f63]"><Activity size={13}/> Situação clínica dos animais</p>
-                        {statsVet.situacoes.length === 0 ? <p className="text-[9px] italic text-gray-400">Sem registros veterinários.</p> : statsVet.situacoes.map(([situacao, count]) => (
-                          <div key={situacao} className="mb-3">
-                            <div className="mb-1.5 flex justify-between gap-3 text-[9px] font-bold text-gray-600">
-                              <span>{situacao}</span><span className="shrink-0 font-black text-rose-700">{count} ({percentOf(count, statsVet.total)}%)</span>
-                            </div>
-                            <div className="h-1.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-rose-600" style={{ width: `${percentOf(count, statsVet.total)}%` }} /></div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="pt-5">
-                        <p className="mb-4 flex items-center gap-2 text-[8px] font-black uppercase tracking-widest text-gray-500"><Stethoscope size={13}/> Diagnósticos registrados</p>
-                        {statsVet.doencas.length === 0 ? <p className="text-[9px] italic text-gray-400">Sem diagnósticos informados.</p> : statsVet.doencas.map(([diagnostico, count]) => (
-                          <div key={diagnostico} className="mb-3 flex items-center justify-between border-b border-gray-50 pb-3 text-[9px]">
-                            <span className="font-bold text-gray-600">{diagnostico}</span>
-                            <span className="font-black text-rose-700">{count}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {statTab === 'doacoes' && (
-                    <div className="animate-fade-in text-left">
-                      <div className="flex items-end justify-between gap-5 border-b border-gray-100 pb-5">
-                        <div>
-                          <p className="text-[7px] font-black uppercase tracking-[0.2em] text-gray-400">Entregas realizadas</p>
-                          <div className="mt-2 flex items-baseline gap-2">
-                            <p className="text-4xl font-black leading-none text-[#101932]">{statsDoacoes.total}</p>
-                            <p className="text-[9px] font-black uppercase text-gray-500">atendimentos</p>
-                          </div>
-                        </div>
-                        <div className="border-l border-gray-100 pl-5 text-right">
-                          <p className="text-[7px] font-black uppercase tracking-[0.18em] text-emerald-700">Hoje</p>
-                          <div className="mt-2 flex items-center justify-end gap-2 text-emerald-700">
-                            <Gift size={17} />
-                            <p className="text-3xl font-black leading-none">{statsDoacoes.hoje}</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-3 divide-x divide-gray-100 border-b border-gray-100 py-5">
-                        <div className="pr-3">
-                          <p className="text-2xl font-black text-[#292f63]">{statsDoacoes.assistidos}</p>
-                          <p className="mt-1 text-[7px] font-black uppercase text-gray-500">Assistidos</p>
-                        </div>
-                        <div className="px-3">
-                          <p className="text-2xl font-black text-orange-700">{statsDoacoes.itensTotal}</p>
-                          <p className="mt-1 text-[7px] font-black uppercase text-gray-500">Itens/categorias</p>
-                        </div>
-                        <div className="pl-3">
-                          <p className="text-2xl font-black text-emerald-700">{statsDoacoes.solicitacoes}</p>
-                          <p className="mt-1 text-[7px] font-black uppercase text-gray-500">Solicitações</p>
-                        </div>
-                      </div>
-
-                      <div className="pt-5">
-                        <p className="mb-4 flex items-center gap-2 text-[8px] font-black uppercase tracking-widest text-[#292f63]"><Gift size={13}/> Itens entregues</p>
-                        {statsDoacoes.itens.length === 0 ? <p className="text-[9px] italic text-gray-400">Nenhum item registrado.</p> : statsDoacoes.itens.map(([item, count]) => (
-                          <div key={item} className="mb-3">
-                            <div className="mb-1.5 flex justify-between gap-3 text-[9px] font-bold text-gray-600">
-                              <span>{item}</span><span className="shrink-0 font-black text-orange-700">{count}</span>
-                            </div>
-                            <div className="h-1.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-orange-600" style={{ width: `${percentOf(count, statsDoacoes.itensTotal)}%` }} /></div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {statTab === 'justiça' && (
-                    <div className="animate-fade-in text-left">
-                      <div className="flex items-end justify-between gap-5 border-b border-gray-100 pb-5">
-                        <div>
-                          <p className="text-[7px] font-black uppercase tracking-[0.2em] text-gray-400">Demandas jurídicas</p>
-                          <div className="mt-2 flex items-baseline gap-2">
-                            <p className="text-4xl font-black leading-none text-[#101932]">{statsJustica.total}</p>
-                            <p className="text-[9px] font-black uppercase text-gray-500">atendimentos</p>
-                          </div>
-                        </div>
-                        <div className="border-l border-gray-100 pl-5 text-right">
-                          <p className="text-[7px] font-black uppercase tracking-[0.18em] text-emerald-700">Hoje</p>
-                          <div className="mt-2 flex items-center justify-end gap-2 text-emerald-700">
-                            <Gavel size={17} />
-                            <p className="text-3xl font-black leading-none">{statsJustica.hoje}</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-3 divide-x divide-gray-100 border-b border-gray-100 py-5">
-                        <div className="pr-3">
-                          <p className="text-2xl font-black text-[#292f63]">{statsJustica.assistidos}</p>
-                          <p className="mt-1 text-[7px] font-black uppercase text-gray-500">Assistidos</p>
-                        </div>
-                        <div className="px-3">
-                          <p className="text-2xl font-black text-amber-700">{statsJustica.categorias}</p>
-                          <p className="mt-1 text-[7px] font-black uppercase text-gray-500">Categorias</p>
-                        </div>
-                        <div className="pl-3">
-                          <p className="text-2xl font-black text-emerald-700">{statsJustica.acoes}</p>
-                          <p className="mt-1 text-[7px] font-black uppercase text-gray-500">Com ação</p>
-                        </div>
-                      </div>
-
-                      <div className="pt-5">
-                        <p className="mb-4 flex items-center gap-2 text-[8px] font-black uppercase tracking-widest text-[#292f63]"><Gavel size={13}/> Tipos de demanda</p>
-                        {statsJustica.demandas.length === 0 ? <p className="text-[9px] italic text-gray-400">Sem demandas jurídicas registradas.</p> : statsJustica.demandas.map(([demanda, count]) => (
-                          <div key={demanda} className="mb-3">
-                            <div className="mb-1.5 flex justify-between gap-3 text-[9px] font-bold text-gray-600">
-                              <span>{demanda}</span><span className="shrink-0 font-black text-[#292f63]">{count}</span>
-                            </div>
-                            <div className="h-1.5 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-[#292f63]" style={{ width: `${percentOf(count, statsJustica.categorias)}%` }} /></div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-               </div>
-               
-               {canExportReports ? (
-                 <div className="w-full rounded-[1.6rem] border border-gray-200 bg-white p-4 shadow-sm">
-                   <div className="mb-3 flex items-center justify-between gap-3">
-                     <div>
-                       <p className="text-[8px] font-black uppercase tracking-widest text-gray-700">Exportação XLSX</p>
-                       <p className="mt-1 text-[7px] font-bold text-gray-400">Painel, indicadores, alertas e bases detalhadas da aba selecionada.</p>
-                     </div>
-                     <Download size={18} className="shrink-0 text-[#292f63]" />
-                   </div>
-                   <button onClick={() => exportWorkbook('geral')} disabled={isExporting} className="w-full rounded-xl bg-[#292f63] px-4 py-3.5 text-[9px] font-black uppercase tracking-widest text-white shadow-md active:scale-95 disabled:opacity-60">
-                     {isExporting ? 'Gerando XLSX...' : `Exportar ${getExportTheme(statTab === 'justiça' ? 'justica' : statTab).label} - geral`}
-                   </button>
-                   <div className="my-3 border-t border-gray-100"></div>
-                   <label className="mb-2 block text-[7px] font-black uppercase tracking-widest text-gray-500">Data da ação para o recorte</label>
-                   <div className="flex gap-2">
-                     <input type="date" value={exportDate} onChange={(event) => setExportDate(event.target.value)} className="min-w-0 flex-1 rounded-xl border border-gray-200 bg-gray-50 px-3 py-3 text-[10px] font-bold text-gray-700 outline-none focus:border-[#292f63]" />
-                     <button onClick={() => exportWorkbook('data')} disabled={isExporting || !exportDate} className="flex items-center gap-1.5 rounded-xl bg-emerald-700 px-4 py-3 text-[8px] font-black uppercase tracking-wider text-white shadow-md active:scale-95 disabled:opacity-60">
-                       <Calendar size={14} /> Exportar por data
-                     </button>
-                   </div>
-                 </div>
-               ) : (
-                 <div className="w-full rounded-[1.5rem] border border-gray-200 bg-white p-4 text-center">
-                   <p className="text-[8px] font-black uppercase tracking-widest text-gray-500">Visualização liberada</p>
-                   <p className="mt-1 text-[8px] font-bold leading-relaxed text-gray-400">Exportação de dados restrita à coordenação e administração.</p>
-                 </div>
-               )}
-            </div>
+              <DashboardView
+                statTab={statTab}
+                setStatTab={setStatTab}
+                currentActionLocation={currentActionLocation}
+                statsGeral={statsGeral}
+                statsAtuacoes={statsAtuacoes}
+                statsClinica={statsClinica}
+                statsSocial={statsSocial}
+                statsVet={statsVet}
+                statsDoacoes={statsDoacoes}
+                statsJustica={statsJustica}
+                diagnosticStats={diagnosticStats}
+                queueWaiting={queueWaiting.length}
+                queueCritical={queueCritical.length}
+                queueFinished={queueFinished.length}
+                canExportReports={canExportReports}
+                isExporting={isExporting}
+                exportDate={exportDate}
+                setExportDate={setExportDate}
+                exportWorkbook={exportWorkbook}
+              />
             );
           })()}
 
@@ -4567,5 +5144,6 @@ export default function App() {
         </nav>
       </div>
     </div>
+    </ActionLocationContext.Provider>
   );
 }

@@ -39,6 +39,12 @@ service cloud.firestore {
       ];
     }
 
+    function hasAreaWriteRole() {
+      return isCoordinator()
+        || currentProfile().role == 'academico'
+        || isProfessionalProfile();
+    }
+
     function canRegisterAssistido() {
       return isCoordinator()
         || isTransversalCollaborator()
@@ -71,7 +77,7 @@ service cloud.firestore {
 
     function canWorkArea(area) {
       return isCoordinator()
-        || (!isTransversalCollaborator() && (
+        || (hasAreaWriteRole() && !isTransversalCollaborator() && (
         (area == 'Medicina Humana' && profession() == 'medicina')
         || (area == 'Odontologia' && profession() == 'odontologia')
         || (area == 'Psicologia' && profession() == 'psicologia')
@@ -112,6 +118,31 @@ service cloud.firestore {
           || data.status == 'Aguardando Profissional');
     }
 
+    function freeCommentKeys() {
+      return [
+        'id', 'assistidoId', 'data', 'area', 'localAcao', 'unidadeAcao',
+        'obsGeral', 'comentarioLivre', 'extraAtendimento', 'preenchimentoPct',
+        'preenchimentoStatus', 'status', 'nomeAcademico', 'nomeProfissional',
+        'operadorUid', 'permissaoRegistro', 'vetPets'
+      ];
+    }
+
+    function canCreateFreeComment(data) {
+      return data.permissaoRegistro == 'comentario_livre'
+        && data.keys().hasOnly(freeCommentKeys())
+        && data.obsGeral is string
+        && data.obsGeral.size() > 0
+        && data.obsGeral.size() <= 2000;
+    }
+
+    function canUpdateFreeComment() {
+      return request.resource.data.permissaoRegistro == 'comentario_livre'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(freeCommentKeys())
+        && request.resource.data.obsGeral is string
+        && request.resource.data.obsGeral.size() > 0
+        && request.resource.data.obsGeral.size() <= 2000;
+    }
+
     function publicRole(role) {
       return role in [
         'voluntario_eficiente', 'colaborador_servico', 'academico', 'profissional_formado',
@@ -138,14 +169,13 @@ service cloud.firestore {
         && request.resource.data.uid == userId
         && publicRole(request.resource.data.role)
         && (!('profissao' in request.resource.data) || publicProfession(request.resource.data.profissao));
-      allow update: if isAdmin()
-        || (signedIn() && request.auth.uid == userId
+      allow update: if signedIn() && request.auth.uid == userId
           && request.resource.data.uid == resource.data.uid
           && request.resource.data.role == resource.data.role
           && (!('profissao' in resource.data) || request.resource.data.profissao == resource.data.profissao)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'nome', 'nomeSocial', 'telefone', 'photo', 'registro',
-            'perfilAtualizadoEm', 'localAcao', 'cidadeAcao', 'email',
+            'perfilAtualizadoEm', 'localAcao', 'cidadeAcao', 'filial', 'email',
             'emailVerified', 'ultimoLoginEm'
           ])
           && request.resource.data.email == request.auth.token.email
@@ -160,11 +190,8 @@ service cloud.firestore {
           && (!('registro' in request.resource.data)
             || (request.resource.data.registro is string && request.resource.data.registro.size() <= 60))
           && (!('photo' in request.resource.data)
-            || (request.resource.data.photo is string && request.resource.data.photo.size() <= 450000)));
-      allow delete: if isAdmin()
-        || (isOnlyCoordinator()
-          && request.auth.uid != userId
-          && !(resource.data.role in ['admin', 'coordenador']));
+            || (request.resource.data.photo is string && request.resource.data.photo.size() <= 2000));
+      allow delete: if false;
     }
 
     match /admin_audit/{recordId} {
@@ -175,15 +202,22 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    match /app_settings/{settingId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
     match /assistidos/{recordId} {
       allow read: if signedIn();
       allow create: if signedIn() && canRegisterAssistido();
       allow update: if signedIn()
-        && (canRegisterAssistido()
+        && (isAdmin()
+          || (canRegisterAssistido()
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'deletedAt', 'deletedBy', 'deletedByName']))
           || (request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['ultimoAtendimento', 'ultimoAtendimentoEm', 'chegadaAcaoData', 'chegadaAcaoEm'])
             && (canPerformTriage() || canRecordCenso() || currentProfile().profissao != null)));
-      allow delete: if isCoordinator();
+      allow delete: if false;
     }
 
     match /triagens/{recordId} {
@@ -200,7 +234,10 @@ service cloud.firestore {
 
     match /atendimentos/{recordId} {
       allow read: if signedIn();
-      allow create, update: if signedIn() && canWriteAtendimento(request.resource.data);
+      allow create: if signedIn()
+        && (canWriteAtendimento(request.resource.data) || canCreateFreeComment(request.resource.data));
+      allow update: if signedIn()
+        && (canWriteAtendimento(request.resource.data) || canUpdateFreeComment());
       allow delete: if isCoordinator();
     }
   }

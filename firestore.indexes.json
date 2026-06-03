@@ -1,0 +1,29 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "anamneses",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "localAcao", "order": "ASCENDING" },
+        { "fieldPath": "assistidoId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "triagens",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "localAcao", "order": "ASCENDING" },
+        { "fieldPath": "assistidoId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "atendimentos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "localAcao", "order": "ASCENDING" },
+        { "fieldPath": "assistidoId", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
