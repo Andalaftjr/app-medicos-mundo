@@ -2,6 +2,16 @@
 
 Este documento apresenta os principais diagramas do sistema desenvolvido para a Medicos do Mundo em Santos-SP e Itanhaem-SP.
 
+## Versoes em imagem
+
+As imagens abaixo foram geradas para uso direto no documento final em Word/PDF.
+
+![Diagrama de contexto](diagramas/diagrama-contexto.png)
+
+![Fluxo operacional](diagramas/fluxo-operacional.png)
+
+![Arquitetura e seguranca](diagramas/arquitetura-seguranca.png)
+
 ## 1. Diagrama de Contexto
 
 ```mermaid
