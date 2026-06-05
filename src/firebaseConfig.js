@@ -3,16 +3,28 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 
-const env = import.meta.env;
+const env = import.meta.env || {};
+
+const firebaseFallbackConfig = {
+  apiKey: 'AIzaSyAOYOaDpe53z0B39lSRMVjmzXs6EA1udfY',
+  authDomain: 'app-medicos-mundo.firebaseapp.com',
+  projectId: 'app-medicos-mundo',
+  storageBucket: 'app-medicos-mundo.firebasestorage.app',
+  messagingSenderId: '233128004767',
+  appId: '1:233128004767:web:f9f560912f83c20c5566aa',
+  measurementId: 'G-2J6C4ENCYK',
+};
+
+const envOrFallback = (envKey, fallbackKey) => env[envKey] || firebaseFallbackConfig[fallbackKey];
 
 export const firebaseConfig = {
-  apiKey: env.VITE_FIREBASE_API_KEY,
-  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: env.VITE_FIREBASE_APP_ID,
-  measurementId: env.VITE_FIREBASE_MEASUREMENT_ID,
+  apiKey: envOrFallback('VITE_FIREBASE_API_KEY', 'apiKey'),
+  authDomain: envOrFallback('VITE_FIREBASE_AUTH_DOMAIN', 'authDomain'),
+  projectId: envOrFallback('VITE_FIREBASE_PROJECT_ID', 'projectId'),
+  storageBucket: envOrFallback('VITE_FIREBASE_STORAGE_BUCKET', 'storageBucket'),
+  messagingSenderId: envOrFallback('VITE_FIREBASE_MESSAGING_SENDER_ID', 'messagingSenderId'),
+  appId: envOrFallback('VITE_FIREBASE_APP_ID', 'appId'),
+  measurementId: envOrFallback('VITE_FIREBASE_MEASUREMENT_ID', 'measurementId'),
 };
 
 export const app = initializeApp(firebaseConfig);
