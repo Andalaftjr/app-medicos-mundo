@@ -310,20 +310,18 @@ export default function DashboardView({
         </div>
       </header>
 
-      <div className="-mx-4 overflow-x-auto px-4">
-        <div className="flex min-w-max gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           {TABS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               type="button"
               onClick={() => setStatTab(id)}
-              className={`flex min-h-[42px] items-center gap-2 rounded-full border px-4 text-[8px] font-black uppercase tracking-wider transition-all ${selectedTab === id ? 'border-[#292f63] bg-[#292f63] text-white shadow-md' : 'border-gray-200 bg-white text-gray-500 shadow-sm'}`}
+              className={`flex min-h-[42px] min-w-0 items-center justify-center gap-2 rounded-2xl border px-3 text-center text-[8px] font-black uppercase tracking-wider transition-all ${selectedTab === id ? 'border-[#292f63] bg-[#292f63] text-white shadow-md' : 'border-gray-200 bg-white text-gray-500 shadow-sm'}`}
             >
-              <Icon size={13} />
-              {label}
+              <Icon size={13} className="shrink-0" />
+              <span className="min-w-0 truncate">{label}</span>
             </button>
           ))}
-        </div>
       </div>
 
       {panels[selectedTab]}
