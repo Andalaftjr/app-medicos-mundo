@@ -84,13 +84,8 @@ As imagens abaixo foram anonimizadas para evitar exposicao de dados pessoais, em
 
 ## Documentacao academica
 
-- [Indice da documentacao academica](docs/DOCUMENTACAO_ACADEMICA.md)
-- [Documento final em Word](ATIVIDADE_EXTENSIONISTA_II_TRABALHO_FINAL_LEANDRO_ANDALAFT.docx)
-- [Documento final em PDF](ATIVIDADE_EXTENSIONISTA_II_TRABALHO_FINAL_LEANDRO_ANDALAFT.pdf)
-- [Relatorio da Atividade Extensionista](docs/RELATORIO_ATIVIDADE_EXTENSIONISTA.md)
 - [Diagramas do Projeto](docs/DIAGRAMAS.md)
 - [Evidencias de Desenvolvimento e Aplicacao](docs/EVIDENCIAS.md)
-- [Orientacao para Publicacao no GitHub](docs/ORIENTACAO_GITHUB.md)
 - [Como executar localmente](docs/EXECUCAO_LOCAL.md)
 
 ## Como executar localmente
