@@ -86,7 +86,6 @@ As imagens abaixo foram anonimizadas para evitar exposicao de dados pessoais, em
 
 - [Diagramas do Projeto](docs/DIAGRAMAS.md)
 - [Evidencias de Desenvolvimento e Aplicacao](docs/EVIDENCIAS.md)
-- [Como executar localmente](docs/EXECUCAO_LOCAL.md)
 
 ## Como executar localmente
 
