@@ -152,4 +152,4 @@ Esses itens estao protegidos no `.gitignore`.
 
 ## Status
 
-Projeto funcional, documentado e preparado para publicacao no GitHub com evidencias anonimizadas.
+Projeto funcional e documentado.
